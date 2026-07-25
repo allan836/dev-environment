@@ -1,0 +1,40 @@
+# Secrets & credentials — never commit
+*.env
+.env.*
+*.pem
+*.key
+*_rsa
+*_ed25519
+*.crt
+secrets/
+vault_pass*
+*.tfvars
+!*.tfvars.example
+
+# Ansible
+*.retry
+ansible/inventory/*.local.*
+
+# Terraform / OpenTofu state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# Docker
+docker/**/data/
+docker/**/volumes/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
