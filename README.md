@@ -113,6 +113,7 @@ dev-environment/
 | Troubleshooting | [docs/troubleshooting/README.md](./docs/troubleshooting/README.md) |
 | Security & secrets | [docs/security/README.md](./docs/security/README.md) |
 | Decision records | [docs/decisions/README.md](./docs/decisions/README.md) |
+| Cross-platform onboarding automation (macOS + Fedora) | [workstation-bootstrap/README.md](./workstation-bootstrap/README.md) |
 
 ## Automation Roadmap
 
