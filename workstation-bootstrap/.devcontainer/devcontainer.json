@@ -1,15 +1,11 @@
 {
   "name": "workstation-bootstrap-template",
-  "dockerComposeFile": ["../docker-compose.yml"],
-  "service": "nginx",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "workspaceFolder": "/workspace",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {},
-    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
-    "ghcr.io/devcontainers/features/python:1": {},
-    "ghcr.io/devcontainers/features/java:1": { "version": "17" },
-    "ghcr.io/devcontainers/features/aws-cli:1": {},
-    "ghcr.io/devcontainers/features/terraform:1": {}
+    "ghcr.io/devcontainers/features/java:1": { "version": "17", "jdkDistro": "open", "installMaven": "true" },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
   "customizations": {
     "vscode": {

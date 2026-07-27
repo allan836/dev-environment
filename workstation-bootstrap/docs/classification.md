@@ -5,6 +5,15 @@ tool from that document is placed into one of five layers, then marked as
 **host** (installed directly on the engineer's machine) or **container**
 (runs in Docker, defined by a project, not the workstation).
 
+> **Note:** the container examples below (`docker compose up mongo`, etc.)
+> describe the original, generic placeholder stack that used to live in
+> [../docker-compose.yml](../docker-compose.yml). That file no longer
+> defines any services — for kv-backend, the actual container layer is
+> kv-backend's own `preload-docker-compose` stack, driven via
+> `make kv-up`/`kv-init`/`kv-verify` (see [../README.md](../README.md#kv-backend-local-environment)).
+> This page still reflects the general host-vs-container reasoning applied
+> to the original checklist.
+
 ## 1. Core System Tools (host)
 
 | Tool | Notes |

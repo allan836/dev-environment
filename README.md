@@ -91,7 +91,25 @@ dev-environment/
 
 ## Quick Start
 
-> Automation is not yet implemented. See [ROADMAP.md](./ROADMAP.md) for status.
+> Root-level automation (`bootstrap/`, `ansible/`, `docker/compose/`) is not
+> yet implemented. See [ROADMAP.md](./ROADMAP.md) for status.
+
+**For kv-backend specifically**, use [workstation-bootstrap/](./workstation-bootstrap/)
+instead — it is the real, working single-command path today:
+
+```bash
+cd workstation-bootstrap
+./setup.sh      # host tools: git, docker, java 17, maven, node...
+make kv-up      # builds kv-backend + starts its own docker-compose stack
+make kv-init    # first time only: DB/Cassandra/Solr init
+make kv-verify  # checks kv-backend services are reachable
+```
+
+See [workstation-bootstrap/README.md#kv-backend-local-environment](./workstation-bootstrap/README.md#kv-backend-local-environment)
+for prerequisites (kv-backend's preload Docker images must be downloaded
+manually first) and full details.
+
+For the general Fedora-only workstation described below:
 
 1. Install Fedora Workstation on the target machine.
 2. Read [docs/setup/fedora-base-setup.md](./docs/setup/fedora-base-setup.md).

@@ -31,3 +31,6 @@ check java java
 check mvn mvn
 
 echo "Verification complete. Re-run individual install scripts under scripts/ for anything marked MISSING."
+echo ""
+echo "==> kv-backend services (run 'make kv-up' first if these are all MISSING)"
+"$(dirname "${BASH_SOURCE[0]}")/kv-backend.sh" verify

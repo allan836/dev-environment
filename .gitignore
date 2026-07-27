@@ -25,6 +25,12 @@ ansible/inventory/*.local.*
 docker/**/data/
 docker/**/volumes/
 
+# Large binary assets (e.g. kv-backend preload images tarball) — too big
+# for a normal git remote (GitHub rejects >100MB without Git LFS).
+# Distribute out-of-band; workstation-bootstrap/scripts/kv-backend.sh
+# expects it to exist locally at this path but does not require it in git.
+assets/*.tar.gz
+
 # OS / editor cruft
 .DS_Store
 *.swp

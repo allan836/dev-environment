@@ -63,9 +63,14 @@ Next steps (manual, see README.md#manual-steps-not-automated):
   - Grant screen/audio recording permissions (macOS only).
   - Install FortiToken Mobile on your phone.
 
-For project-local databases/services (MySQL, MongoDB, Cassandra, RabbitMQ,
-Neo4j, nginx, Consul), run:
-  docker compose up -d
+For the kv-backend local dev environment (MySQL, RabbitMQ, Cassandra, Solr,
+Memcached, Tomcat/portal — kv-backend's own docker-compose stack), set
+KV_BACKEND_DIR in .env (defaults to $HOME/workspace/repos/kv-backend) then
+run:
+  make kv-up      # build WARs (first run) + docker compose up -d
+  make kv-init    # first time only: kv-backend's own DB/Cassandra/Solr init
+  make kv-verify  # check services are reachable
 
-See docs/classification.md and docs/architecture.md for the full rationale.
+See docs/classification.md and docs/architecture.md for the full rationale,
+and README.md#kv-backend-local-environment for kv-backend specifics.
 EOF
