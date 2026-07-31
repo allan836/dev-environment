@@ -5,8 +5,8 @@
 #   or, from a clone:
 #   ./setup.sh
 #
-# Detects the OS (macOS or Fedora), then runs each install stage.
-# Every stage is idempotent: safe to re-run.
+# Detects the OS (macOS, Fedora, Ubuntu, or Debian), then runs each install
+# stage. Every stage is idempotent: safe to re-run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +16,16 @@ detect_os() {
     echo "mac"
   elif [[ "${OSTYPE:-}" == linux-gnu* ]] && [[ -f /etc/fedora-release ]]; then
     echo "fedora"
+  elif [[ "${OSTYPE:-}" == linux-gnu* ]] && [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}:${ID_LIKE:-}" in
+      ubuntu:*) echo "ubuntu" ;;
+      debian:*) echo "debian" ;;
+      *:*ubuntu*) echo "ubuntu" ;;
+      *:*debian*) echo "debian" ;;
+      *) echo "unsupported" ;;
+    esac
   else
     echo "unsupported"
   fi
@@ -25,16 +35,11 @@ export OS_FAMILY
 OS_FAMILY="$(detect_os)"
 
 if [[ "$OS_FAMILY" == "unsupported" ]]; then
-  echo "Error: this script supports macOS and Fedora only. Detected OSTYPE=${OSTYPE:-unknown}." >&2
+  echo "Error: this script supports macOS, Fedora, Ubuntu, and Debian only. Detected OSTYPE=${OSTYPE:-unknown}." >&2
   exit 1
 fi
 
 echo "==> Detected OS family: $OS_FAMILY"
-
-if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-  cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
-  echo "==> Created .env from .env.example (edit it to change default credentials)"
-fi
 
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
   cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"

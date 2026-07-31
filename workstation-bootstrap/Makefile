@@ -1,4 +1,4 @@
-.PHONY: setup verify kv-load-images kv-up kv-init kv-down kv-status kv-verify kv-logs
+.PHONY: setup verify kv-load-images kv-up kv-init kv-clean-slate kv-clean-slate-remote kv-down kv-status kv-verify kv-logs
 
 setup:
 	./setup.sh
@@ -14,6 +14,12 @@ kv-up:
 
 kv-init:
 	./scripts/kv-backend.sh init
+
+kv-clean-slate:
+	./scripts/kv-clean-slate.sh
+
+kv-clean-slate-remote:
+	./scripts/kv-clean-slate.sh --remote
 
 kv-down:
 	./scripts/kv-backend.sh down
