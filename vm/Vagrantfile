@@ -25,7 +25,7 @@ VM_RAM   = ENV.fetch("VAGRANT_VM_RAM",  "8192").to_i
 # Each provider uses the best-maintained box for that backend.
 BOXES = {
   "virtualbox"    => "ubuntu/noble64",
-  "libvirt"       => "generic/ubuntu2404",
+  "libvirt"       => "bento/ubuntu-24.04",
   "vmware_desktop"=> "bento/ubuntu-24.04",
 }
 

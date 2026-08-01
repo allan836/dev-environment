@@ -61,8 +61,9 @@ VM_DIR="$REPO_ROOT/vm"
 ANSIBLE_DIR="$REPO_ROOT/ansible"
 LOG_FILE="$REPO_ROOT/provision.log"
 
-# Backends to try, in order.  Comment out any you never want attempted.
-BACKENDS=("virtualbox" "libvirt" "vmware_desktop")
+# Detection probes run first; only the selected provider is installed/booted.
+# To restrict which providers are considered, edit PROVIDER_PRIORITY.
+PROVIDER_PRIORITY=("virtualbox" "libvirt" "vmware_desktop")
 
 # --------------------------------------------------------------------------- #
 # Colour helpers
@@ -140,6 +141,7 @@ detect_host_os() {
 install_vagrant() {
   if has vagrant; then
     success "Vagrant already installed: $(vagrant --version)"
+    _ensure_vagrant_vbox_compat
     return 0
   fi
 
@@ -163,6 +165,9 @@ install_vagrant() {
       ;;
     fedora)
       sudo dnf install -y vagrant
+      # dnf ships Vagrant 2.3.x which does not support VirtualBox 7.1+;
+      # upgrade from HashiCorp if the installed version is incompatible.
+      _ensure_vagrant_vbox_compat
       ;;
     linux_generic)
       _install_vagrant_from_hashicorp
@@ -187,12 +192,43 @@ _install_vagrant_from_hashicorp() {
   local pkg_arch="amd64"
   [[ "$arch" == "aarch64" || "$arch" == "arm64" ]] && pkg_arch="arm64"
   local vagrant_version="2.4.1"
-  local deb_url="https://releases.hashicorp.com/vagrant/${vagrant_version}/vagrant_${vagrant_version}-1_${pkg_arch}.deb"
-  local tmp_deb="/tmp/vagrant_${vagrant_version}.deb"
   info "Downloading Vagrant ${vagrant_version} from HashiCorp..."
-  curl -fsSL "$deb_url" -o "$tmp_deb"
-  sudo dpkg -i "$tmp_deb"
-  rm -f "$tmp_deb"
+  case "$HOST_OS" in
+    fedora)
+      local rpm="vagrant_${vagrant_version}-1_${pkg_arch}.rpm"
+      local rpm_url="https://releases.hashicorp.com/vagrant/${vagrant_version}/${rpm}"
+      curl -fsSL "$rpm_url" -o "/tmp/${rpm}"
+      sudo rpm -Uvh "/tmp/${rpm}"
+      rm -f "/tmp/${rpm}"
+      ;;
+    *)
+      local deb_url="https://releases.hashicorp.com/vagrant/${vagrant_version}/vagrant_${vagrant_version}-1_${pkg_arch}.deb"
+      local tmp_deb="/tmp/vagrant_${vagrant_version}.deb"
+      curl -fsSL "$deb_url" -o "$tmp_deb"
+      sudo dpkg -i "$tmp_deb"
+      rm -f "$tmp_deb"
+      ;;
+  esac
+}
+
+# Ensure the installed Vagrant version supports the installed VirtualBox version.
+# VirtualBox 7.1+ requires Vagrant 2.4.0+.  If the current Vagrant is too old,
+# download a known-good version directly from HashiCorp.
+_ensure_vagrant_vbox_compat() {
+  has vboxmanage || return 0
+
+  local vbox_ver; vbox_ver=$(vboxmanage --version 2>/dev/null | grep -oP '^\d+\.\d+')
+  local vbox_major; vbox_major=$(echo "$vbox_ver" | cut -d. -f1)
+  local vbox_minor; vbox_minor=$(echo "$vbox_ver" | cut -d. -f2)
+  local vagrant_ver; vagrant_ver=$(vagrant --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')
+  local vagrant_minor; vagrant_minor=$(echo "$vagrant_ver" | cut -d. -f2)
+
+  # Vagrant < 2.4.0 only supports VirtualBox up to 7.0
+  if [[ "$vbox_major" -ge 7 && "$vbox_minor" -ge 1 && "$vagrant_minor" -lt 4 ]]; then
+    warn "Vagrant $vagrant_ver does not support VirtualBox ${vbox_major}.${vbox_minor} (need >= 2.4.0). Upgrading..."
+    _install_vagrant_from_hashicorp
+    success "Vagrant upgraded: $(vagrant --version)"
+  fi
 }
 
 # --------------------------------------------------------------------------- #
@@ -372,40 +408,145 @@ try_vmware() {
 }
 
 # --------------------------------------------------------------------------- #
-# Backend dispatcher — tries each backend in BACKENDS order until one works
+# Provider detection — read-only probes, no side effects
 # --------------------------------------------------------------------------- #
 ACTIVE_BACKEND=""
+SELECTED_BACKEND=""
+AVAILABLE_BACKENDS=()
 
+# Returns 0 = ready, 1 = not installed, 2 = installed but Vagrant incompatible
+_probe_virtualbox() {
+  has vboxmanage || return 1
+  local vbox_ver vbox_major vbox_minor vagrant_ver vagrant_minor
+  vbox_ver=$(vboxmanage --version 2>/dev/null | grep -oP '^\d+\.\d+')
+  vbox_major=$(echo "$vbox_ver" | cut -d. -f1)
+  vbox_minor=$(echo "$vbox_ver" | cut -d. -f2)
+  vagrant_ver=$(vagrant --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+')
+  vagrant_minor=$(echo "$vagrant_ver" | cut -d. -f2)
+  if [[ "$vbox_major" -ge 7 && "$vbox_minor" -ge 1 && "$vagrant_minor" -lt 4 ]]; then
+    return 2
+  fi
+  return 0
+}
+
+_probe_libvirt() {
+  has virsh || return 1
+  return 0
+}
+
+_probe_vmware() {
+  has vmware || has vmrun || return 1
+  return 0
+}
+
+detect_providers() {
+  banner "Checking virtualization..."
+  local rc line
+
+  for backend in "${PROVIDER_PRIORITY[@]}"; do
+    case "$backend" in
+      virtualbox)
+        _probe_virtualbox; rc=$?
+        if [[ $rc -eq 0 ]]; then
+          line="${GREEN}✔${RESET}  VirtualBox $(vboxmanage --version 2>/dev/null | head -n1) — compatible"
+          AVAILABLE_BACKENDS+=("virtualbox")
+        elif [[ $rc -eq 2 ]]; then
+          line="${YELLOW}⚠${RESET}  VirtualBox $(vboxmanage --version 2>/dev/null | head -n1) — Vagrant $(vagrant --version | grep -oP '\d+\.\d+\.\d+') too old; will auto-upgrade"
+          AVAILABLE_BACKENDS+=("virtualbox")
+        else
+          line="${RED}✘${RESET}  VirtualBox — not installed"
+        fi
+        ;;
+      libvirt)
+        _probe_libvirt; rc=$?
+        if [[ $rc -eq 0 ]]; then
+          line="${GREEN}✔${RESET}  KVM/libvirt (virsh $(virsh --version 2>/dev/null))"
+          AVAILABLE_BACKENDS+=("libvirt")
+        else
+          line="${RED}✘${RESET}  KVM/libvirt — not installed"
+        fi
+        ;;
+      vmware_desktop)
+        _probe_vmware; rc=$?
+        if [[ $rc -eq 0 ]]; then
+          line="${GREEN}✔${RESET}  VMware"
+          AVAILABLE_BACKENDS+=("vmware_desktop")
+        else
+          line="${RED}✘${RESET}  VMware — not installed"
+        fi
+        ;;
+    esac
+    echo -e "  $line"
+  done
+  echo ""
+
+  if [[ ${#AVAILABLE_BACKENDS[@]} -eq 0 ]]; then
+    warn "No hypervisor detected. Will attempt to install VirtualBox."
+    AVAILABLE_BACKENDS=("virtualbox")
+  fi
+}
+
+select_provider() {
+  if [[ ${#AVAILABLE_BACKENDS[@]} -eq 1 ]]; then
+    SELECTED_BACKEND="${AVAILABLE_BACKENDS[0]}"
+    info "Using provider: ${BOLD}${SELECTED_BACKEND}${RESET}"
+    return 0
+  fi
+
+  echo -e "${BOLD}Detected providers:${RESET}"
+  local i
+  for i in "${!AVAILABLE_BACKENDS[@]}"; do
+    echo "  [$((i+1))] ${AVAILABLE_BACKENDS[$i]}"
+  done
+  echo ""
+
+  local default="${AVAILABLE_BACKENDS[0]}"
+  read -rp "Select provider [1-${#AVAILABLE_BACKENDS[@]}] (default: $default): " choice
+  if [[ -z "$choice" ]]; then
+    SELECTED_BACKEND="$default"
+  else
+    local idx=$(( choice - 1 ))
+    if [[ $idx -ge 0 && $idx -lt ${#AVAILABLE_BACKENDS[@]} ]]; then
+      SELECTED_BACKEND="${AVAILABLE_BACKENDS[$idx]}"
+    else
+      warn "Invalid choice. Using default: $default"
+      SELECTED_BACKEND="$default"
+    fi
+  fi
+  info "Using provider: ${BOLD}${SELECTED_BACKEND}${RESET}"
+}
+
+# --------------------------------------------------------------------------- #
+# VM provisioning — detect first, then set up only the selected provider
+# --------------------------------------------------------------------------- #
 provision_vm() {
   if [[ "$DESTROY_FIRST" == "true" ]]; then
     info "Destroying existing VM (--destroy flag set)..."
     cd "$VM_DIR" && vagrant destroy -f 2>/dev/null || true
   fi
 
-  # Write the VM name into the Vagrantfile environment
   export VAGRANT_VM_NAME="$VM_NAME"
   export VAGRANT_VM_CPU="$VM_CPU"
   export VAGRANT_VM_RAM="$VM_RAM"
 
-  for backend in "${BACKENDS[@]}"; do
-    echo ""
-    banner "[ Backend attempt: $backend ]"
-    case "$backend" in
-      virtualbox)   try_virtualbox  && break ;;
-      libvirt)      try_kvm         && break ;;
-      vmware_desktop) try_vmware    && break ;;
-      *)            warn "Unknown backend '$backend', skipping." ;;
-    esac
-  done
+  detect_providers
+  select_provider
+
+  echo ""
+  banner "[ Booting with provider: $SELECTED_BACKEND ]"
+  case "$SELECTED_BACKEND" in
+    virtualbox)     try_virtualbox ;;
+    libvirt)        try_kvm        ;;
+    vmware_desktop) try_vmware     ;;
+    *) error "Unknown provider '$SELECTED_BACKEND'"; exit 1 ;;
+  esac
 
   if [[ -z "$ACTIVE_BACKEND" ]]; then
-    error "All hypervisor backends failed. Check $LOG_FILE for details."
-    error "Tried: ${BACKENDS[*]}"
-    error "Ensure at least one of VirtualBox, KVM, or VMware is available."
+    error "Provider '$SELECTED_BACKEND' failed to boot the VM. Check $LOG_FILE for details."
     exit 1
   fi
 
-  success "VM booted via backend: $ACTIVE_BACKEND"
+  success "VM booted via provider: $ACTIVE_BACKEND"
 }
 
 # --------------------------------------------------------------------------- #
