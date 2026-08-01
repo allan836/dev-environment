@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# lib/detect.sh — Host OS and hypervisor detection
+# lib/detect.sh — Host OS and virtualization provider detection
 #
 # Exports:
-#   HOST_OS         — mac | ubuntu | debian | fedora | linux_generic | unknown
-#   PKG_MANAGER     — brew | apt | dnf | unknown
-#   AVAILABLE_PROVIDERS — space-separated list of detected providers
+#   HOST_OS             — mac | ubuntu | debian | fedora | rhel | linux_generic
+#   PKG_MANAGER         — brew | apt | dnf | unknown
+#   HOST_ARCH           — amd64 | arm64
+#   AVAILABLE_PROVIDERS — array of detected / installable providers
 #   SELECTED_PROVIDER   — the provider chosen for this run
 #
+# Provider probe order comes from PROVIDER_PRIORITY (set in provision.sh).
 # Source this file; do not execute it directly.
 # =============================================================================
 
-# Requires lib/log.sh to be sourced first.
-
 # --------------------------------------------------------------------------- #
 # detect_host_os
-# Sets HOST_OS and PKG_MANAGER based on the running operating system.
 # --------------------------------------------------------------------------- #
 detect_host_os() {
   banner "Detecting host"
@@ -30,61 +29,83 @@ detect_host_os() {
     # shellcheck disable=SC1091
     . /etc/os-release
     case "${ID:-}:${ID_LIKE:-}" in
-      ubuntu:*|*:*ubuntu*) HOST_OS="ubuntu"; PKG_MANAGER="apt" ;;
-      debian:*|*:*debian*) HOST_OS="debian"; PKG_MANAGER="apt" ;;
+      ubuntu:*|*:*ubuntu*) HOST_OS="ubuntu";       PKG_MANAGER="apt" ;;
+      debian:*|*:*debian*) HOST_OS="debian";       PKG_MANAGER="apt" ;;
       rhel:*|centos:*|*:*rhel*)
-        HOST_OS="rhel"; PKG_MANAGER="dnf" ;;
-      *) HOST_OS="linux_generic"; PKG_MANAGER="unknown" ;;
+                           HOST_OS="rhel";         PKG_MANAGER="dnf" ;;
+      *)                   HOST_OS="linux_generic"; PKG_MANAGER="unknown" ;;
     esac
   else
     HOST_OS="unknown"
     PKG_MANAGER="unknown"
   fi
 
-  export HOST_OS PKG_MANAGER
-  success "Host OS: ${HOST_OS}"
+  local raw_arch; raw_arch="$(uname -m)"
+  case "$raw_arch" in
+    aarch64|arm64) HOST_ARCH="arm64" ;;
+    *)             HOST_ARCH="amd64" ;;
+  esac
+
+  export HOST_OS PKG_MANAGER HOST_ARCH
+  success "Host OS: ${HOST_OS} (${HOST_ARCH})"
 }
 
 # --------------------------------------------------------------------------- #
-# _probe_virtualbox
-# Returns:
-#   0 — installed and compatible
-#   1 — not installed
-#   2 — installed but Vagrant version is incompatible (VirtualBox 7.1+ needs Vagrant 2.4+)
+# _probe_multipass
+# Returns 0 if multipass is installed (or macOS where it is auto-installable).
+# Returns 1 if not present and host cannot install it.
 # --------------------------------------------------------------------------- #
-_probe_virtualbox() {
-  has vboxmanage || return 1
+_probe_multipass() {
+  if has multipass; then
+    return 0
+  fi
+  # Multipass is installable on macOS and Linux via snap or package manager
+  case "$HOST_OS" in
+    mac|ubuntu|debian|fedora|rhel|linux_generic) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
-  local vbox_ver vbox_major vbox_minor
-  vbox_ver=$(vboxmanage --version 2>/dev/null | grep -oP '^\d+\.\d+' || echo "0.0")
-  vbox_major=$(echo "$vbox_ver" | cut -d. -f1)
-  vbox_minor=$(echo "$vbox_ver" | cut -d. -f2)
+# --------------------------------------------------------------------------- #
+# _probe_libvirt
+# Returns 0 if KVM/libvirt is installed or installable on this Linux host.
+# Returns 1 on macOS (not supported) or missing hardware virtualisation.
+# --------------------------------------------------------------------------- #
+_probe_libvirt() {
+  [[ "$HOST_OS" == "mac" ]] && return 1
 
-  if has vagrant; then
-    local vagrant_ver vagrant_major vagrant_minor
-    vagrant_ver=$(vagrant --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
-    vagrant_major=$(echo "$vagrant_ver" | cut -d. -f1)
-    vagrant_minor=$(echo "$vagrant_ver" | cut -d. -f2)
-
-    # VirtualBox 7.1+ requires Vagrant 2.4.0+
-    if [[ "$vbox_major" -ge 7 && "$vbox_minor" -ge 1 ]] \
-       && [[ "$vagrant_major" -lt 2 || ( "$vagrant_major" -eq 2 && "$vagrant_minor" -lt 4 ) ]]; then
-      return 2
-    fi
+  # Require hardware virtualisation support
+  if [[ -f /proc/cpuinfo ]]; then
+    grep -qE '(vmx|svm)' /proc/cpuinfo || return 1
   fi
 
-  return 0
+  if has virsh; then
+    return 0
+  fi
+
+  # libvirt is installable via dnf / apt on Linux
+  case "$HOST_OS" in
+    ubuntu|debian|fedora|rhel|linux_generic) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-_probe_libvirt() {
-  [[ "${HOST_OS}" == "mac" ]] && return 1
-  has virsh || return 1
-  return 0
-}
+# --------------------------------------------------------------------------- #
+# _probe_incus
+# Returns 0 if incus is installed or installable on this Linux host.
+# Returns 1 on macOS.
+# --------------------------------------------------------------------------- #
+_probe_incus() {
+  [[ "$HOST_OS" == "mac" ]] && return 1
 
-_probe_vmware() {
-  has vmware || has vmrun || return 1
-  return 0
+  if has incus; then
+    return 0
+  fi
+
+  case "$HOST_OS" in
+    ubuntu|debian|fedora|rhel|linux_generic) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # --------------------------------------------------------------------------- #
@@ -92,44 +113,57 @@ _probe_vmware() {
 # Probes each provider in PROVIDER_PRIORITY and populates AVAILABLE_PROVIDERS.
 # --------------------------------------------------------------------------- #
 detect_providers() {
-  banner "Checking virtualization"
+  banner "Checking virtualization providers"
   AVAILABLE_PROVIDERS=()
-  local rc label
+  local rc
 
   for backend in "${PROVIDER_PRIORITY[@]}"; do
     case "$backend" in
-      virtualbox)
-        _probe_virtualbox; rc=$?
+      multipass)
+        _probe_multipass; rc=$?
         if [[ $rc -eq 0 ]]; then
-          label="VirtualBox $(vboxmanage --version 2>/dev/null | head -n1) — compatible"
-          success "$label"
-          AVAILABLE_PROVIDERS+=("virtualbox")
-        elif [[ $rc -eq 2 ]]; then
-          label="VirtualBox $(vboxmanage --version 2>/dev/null | head -n1) — Vagrant too old (will upgrade automatically)"
-          warn "$label"
-          AVAILABLE_PROVIDERS+=("virtualbox")
+          if has multipass; then
+            success "Multipass $(multipass version 2>/dev/null | head -n1 | awk '{print $2}') — installed"
+          else
+            success "Multipass — installable on ${HOST_OS}"
+          fi
+          AVAILABLE_PROVIDERS+=("multipass")
         else
-          warn "VirtualBox — not installed"
+          warn "Multipass — not supported on ${HOST_OS}"
         fi
         ;;
       libvirt)
         _probe_libvirt; rc=$?
         if [[ $rc -eq 0 ]]; then
-          label="KVM/libvirt $(virsh --version 2>/dev/null | head -n1) — compatible"
-          success "$label"
+          if has virsh; then
+            success "KVM/libvirt $(virsh --version 2>/dev/null | head -n1) — installed"
+          else
+            success "KVM/libvirt — installable on ${HOST_OS} (hardware-virt detected)"
+          fi
           AVAILABLE_PROVIDERS+=("libvirt")
         else
-          warn "KVM/libvirt — not installed"
+          if [[ "$HOST_OS" == "mac" ]]; then
+            warn "KVM/libvirt — not supported on macOS"
+          else
+            warn "KVM/libvirt — CPU does not expose virtualisation flags (vmx/svm)"
+          fi
         fi
         ;;
-      vmware_desktop)
-        _probe_vmware; rc=$?
+      incus)
+        _probe_incus; rc=$?
         if [[ $rc -eq 0 ]]; then
-          success "VMware — detected"
-          AVAILABLE_PROVIDERS+=("vmware_desktop")
+          if has incus; then
+            success "Incus $(incus version 2>/dev/null | head -n1) — installed"
+          else
+            success "Incus — installable on ${HOST_OS}"
+          fi
+          AVAILABLE_PROVIDERS+=("incus")
         else
-          warn "VMware — not installed"
+          warn "Incus — not supported on ${HOST_OS}"
         fi
+        ;;
+      *)
+        warn "Unknown provider in PROVIDER_PRIORITY: ${backend} — skipping"
         ;;
     esac
   done
@@ -140,13 +174,12 @@ detect_providers() {
 # --------------------------------------------------------------------------- #
 # select_provider
 # Picks the first available provider (priority order).
-# Sets SELECTED_PROVIDER.
-# If no provider is installed, defaults to "virtualbox" (will be auto-installed).
+# If none detected, defaults to multipass (will be auto-installed).
 # --------------------------------------------------------------------------- #
 select_provider() {
   if [[ ${#AVAILABLE_PROVIDERS[@]} -eq 0 ]]; then
-    warn "No hypervisor detected. Will attempt to install VirtualBox automatically."
-    SELECTED_PROVIDER="virtualbox"
+    warn "No supported provider detected. Will attempt to install Multipass."
+    SELECTED_PROVIDER="multipass"
     export SELECTED_PROVIDER
     return 0
   fi

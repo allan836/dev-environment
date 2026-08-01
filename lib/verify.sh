@@ -2,26 +2,27 @@
 # =============================================================================
 # lib/verify.sh — Post-provisioning verification
 #
-# Runs inside the VM and checks that every required tool is installed.
-# Produces a structured pass/fail summary.
-# Exits 0 only if ALL required checks pass.
+# Copies the verification script into the VM and runs it over SSH.
+# Produces a structured pass/fail summary; exits non-zero if any required
+# check fails.
 #
-# Requires: lib/log.sh sourced, VM_DIR exported.
+# Requires: lib/log.sh, lib/vm.sh (vm_exec, vm_push) sourced.
+#           VM_IP, VM_SSH_USER, VM_SSH_KEY, VM_SSH_PORT, LOG_FILE exported.
 # =============================================================================
 
 # --------------------------------------------------------------------------- #
 # run_verify
-# SSH into the VM and run the verification checks.
 # --------------------------------------------------------------------------- #
 run_verify() {
   banner "Verification"
-  cd "$VM_DIR"
 
-  # Run the full verification script inside the VM.
-  # The script is sourced from the shared mount (dev-environment is mounted
-  # at ~/dev-environment inside the VM via the Vagrantfile synced_folder).
-  vagrant ssh -c "bash ~/dev-environment/lib/_verify_inside_vm.sh" 2>&1 \
-    | tee -a "$LOG_FILE"
+  local remote_script="/tmp/_verify_inside_vm.sh"
+
+  info "Copying verification script to VM..."
+  vm_push "${REPO_ROOT}/lib/_verify_inside_vm.sh" "${remote_script}"
+
+  info "Running verification checks inside VM..."
+  vm_exec "bash ${remote_script}" 2>&1 | tee -a "$LOG_FILE"
 
   local rc=${PIPESTATUS[0]}
   if [[ $rc -ne 0 ]]; then
