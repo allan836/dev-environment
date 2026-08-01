@@ -1,74 +1,165 @@
 ---
+# =============================================================================
 # Role: java
-# Installs Java 17 (primary) and Java 8 (compatibility) via SDKMAN.
-# Also installs Maven 3.8.x.
-# Mirrors install-runtimes.sh SDKMAN block.
+#
+# Installs OpenJDK 8 and OpenJDK 17 via apt.
+# Installs Maven from the Apache archive.
+#
+# CRITICAL — kv-backend compatibility:
+#   ONLY OpenJDK 8 and OpenJDK 17 are installed.
+#   Java 11, 21, 22, 23 are explicitly NOT installed.
+#   Java 17 is set as the default.
+#   Switching between 8 and 17: sudo update-alternatives --config java
+#
+# Versions are read from group_vars/all/versions.yml.
+# =============================================================================
 
-- name: Check if SDKMAN is already installed
-  ansible.builtin.stat:
-    path: "{{ dev_home }}/.sdkman/bin/sdkman-init.sh"
-  register: sdkman_init
-  become: false
-  become_user: "{{ dev_user }}"
+# ---- Prerequisites ---------------------------------------------------------
 
-- name: Install SDKMAN
-  ansible.builtin.shell:
-    cmd: curl -s "https://get.sdkman.io" | bash
-  args:
-    executable: /bin/bash
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
-  when: not sdkman_init.stat.exists
+- name: Install software-properties-common (required for add-apt-repository)
+  ansible.builtin.apt:
+    name: software-properties-common
+    state: present
+    update_cache: true
 
-- name: Install Java 8 (Amazon Corretto) via SDKMAN
-  ansible.builtin.shell:
-    cmd: |
-      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
-      sdk install java 8.0.442-amzn <<< "n" || true
-    executable: /bin/bash
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
+# ---- OpenJDK 8 via deadsnakes PPA (Ubuntu 24.04 does not ship openjdk-8 in main) ----
 
-- name: Install Java 17 (Oracle) via SDKMAN and set as default
-  ansible.builtin.shell:
-    cmd: |
-      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
-      sdk install java 17.0.12-oracle <<< "n" || true
-      sdk default java 17.0.12-oracle
-    executable: /bin/bash
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
+- name: Add deadsnakes PPA for OpenJDK 8 on Ubuntu 24.04
+  ansible.builtin.apt_repository:
+    repo: "ppa:openjdk-r/ppa"
+    state: present
+    update_cache: true
+  when: ansible_distribution == "Ubuntu" and ansible_distribution_major_version | int >= 24
+  ignore_errors: true
 
-- name: Install Maven 3.8.8 via SDKMAN
-  ansible.builtin.shell:
-    cmd: |
-      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
-      sdk install maven 3.8.8 <<< "n" || true
-    executable: /bin/bash
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
+- name: Install OpenJDK 8
+  ansible.builtin.apt:
+    name: "{{ java_8_pkg }}"
+    state: present
+    update_cache: true
 
-- name: Verify Java installation
-  ansible.builtin.shell:
-    cmd: |
-      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
-      java -version 2>&1
-    executable: /bin/bash
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
-  register: java_version
+- name: Verify OpenJDK 8 is installed
+  ansible.builtin.command:
+    cmd: dpkg -l "{{ java_8_pkg }}"
+  register: java8_check
   changed_when: false
+  failed_when: false
 
-- name: Print Java version
+- name: Confirm Java 8 installed
   ansible.builtin.debug:
-    msg: "{{ java_version.stdout }}"
+    msg: "Java 8 installed: {{ java_8_pkg }}"
+  when: java8_check.rc == 0
+
+# ---- OpenJDK 17 ------------------------------------------------------------
+
+- name: Install OpenJDK 17
+  ansible.builtin.apt:
+    name: "{{ java_17_pkg }}"
+    state: present
+    update_cache: true
+
+# ---- Set Java 17 as the system default ------------------------------------
+
+- name: Set Java 17 as the default (java)
+  community.general.alternatives:
+    name: java
+    path: "/usr/lib/jvm/java-17-openjdk-{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}/bin/java"
+    priority: 1700
+  ignore_errors: true
+
+- name: Set javac 17 as the default compiler
+  community.general.alternatives:
+    name: javac
+    path: "/usr/lib/jvm/java-17-openjdk-{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}/bin/javac"
+    priority: 1700
+  ignore_errors: true
+
+- name: Set JAVA_HOME for Java 17 in /etc/environment
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: '^JAVA_HOME='
+    line: "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
+    create: true
+    mode: "0644"
+
+- name: Add JAVA_HOME and update-alternatives helper to developer .bashrc
+  ansible.builtin.blockinfile:
+    path: "{{ dev_home }}/.bashrc"
+    marker: "# {mark} ANSIBLE MANAGED — java"
+    block: |
+      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)
+      export PATH="$JAVA_HOME/bin:$PATH"
+      # Switch Java version: sudo update-alternatives --config java
+      alias java8='sudo update-alternatives --set java /usr/lib/jvm/java-8-openjdk-$(dpkg --print-architecture)/jre/bin/java'
+      alias java17='sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)/bin/java'
+    create: true
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+  become: false
+  become_user: "{{ dev_user }}"
+
+# ---- Maven -----------------------------------------------------------------
+# Install Maven from the Apache archive so the exact version is controlled
+# by versions.yml rather than by whatever Ubuntu's apt currently ships.
+
+- name: Check if Maven {{ maven_version }} is already installed
+  ansible.builtin.stat:
+    path: "{{ maven_install_dir }}/bin/mvn"
+  register: mvn_bin
+
+- name: Create Maven install directory
+  ansible.builtin.file:
+    path: "{{ maven_install_dir }}"
+    state: directory
+    mode: "0755"
+  when: not mvn_bin.stat.exists
+
+- name: Download Maven {{ maven_version }}
+  ansible.builtin.get_url:
+    url: "{{ maven_archive_url }}"
+    dest: "/tmp/apache-maven-{{ maven_version }}-bin.tar.gz"
+    mode: "0644"
+  when: not mvn_bin.stat.exists
+
+- name: Extract Maven {{ maven_version }}
+  ansible.builtin.unarchive:
+    src: "/tmp/apache-maven-{{ maven_version }}-bin.tar.gz"
+    dest: "{{ maven_install_dir }}"
+    remote_src: true
+    extra_opts: ["--strip-components=1"]
+  when: not mvn_bin.stat.exists
+
+- name: Create mvn symlink in /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ maven_install_dir }}/bin/mvn"
+    dest: /usr/local/bin/mvn
+    state: link
+    force: true
+
+- name: Clean up Maven archive
+  ansible.builtin.file:
+    path: "/tmp/apache-maven-{{ maven_version }}-bin.tar.gz"
+    state: absent
+  ignore_errors: true
+
+# ---- Verify ----------------------------------------------------------------
+
+- name: Verify default Java version
+  ansible.builtin.command: java -version
+  register: java_ver
+  changed_when: false
+  ignore_errors: true
+
+- name: Print default Java version
+  ansible.builtin.debug:
+    msg: "Default Java: {{ java_ver.stderr | default(java_ver.stdout) | default('not found') }}"
+
+- name: Verify Maven version
+  ansible.builtin.command: mvn --version
+  register: mvn_ver
+  changed_when: false
+  ignore_errors: true
+
+- name: Print Maven version
+  ansible.builtin.debug:
+    msg: "{{ mvn_ver.stdout_lines[0] | default('Maven not found') }}"

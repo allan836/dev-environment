@@ -1,202 +1,150 @@
-# Dev Environment — Developer Environment Provisioner
+# Developer Environment Provisioner
 
-## Project Vision
-
-A single source of truth for building, documenting, and rebuilding a modern
-cloud/platform engineering developer environment. This repository treats a
-developer machine as infrastructure: version-controlled, declarative,
-reproducible, and disaster-recovery ready. One command provisions a complete
-Ubuntu VM from scratch on any host OS. If a machine is lost, running
-`./provision.sh` on any laptop restores a working environment in minutes.
-
-## Goals
-
-- Provide a single-command setup that works on any developer laptop
-  (macOS, Ubuntu, Debian, Fedora) — no manual OS installation required.
-- Automate all tool installation inside an isolated, reproducible Ubuntu VM.
-- Preserve institutional knowledge (decisions, troubleshooting, runbooks)
-  that normally lives only in one engineer's head.
-- Support kv-backend's containerized local services with minimal friction.
-- Enable disaster recovery: rebuild the entire environment from zero using
-  only this repository.
-
-## Design Principles
-
-1. **Reproducibility** — the same inputs always produce the same workstation.
-2. **Automation** — manual steps are the exception, not the rule.
-3. **Maintainability** — documentation and automation evolve together.
-4. **Documentation as Code** — Markdown lives in version control, reviewed
-   like any other change.
-5. **Idempotency** — every automated task can be re-run safely with no
-   unintended side effects.
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full philosophy and
-architectural decision rules.
-
-## Architecture Overview
-
-The environment is composed of four layers:
-
-- **Host layer** — the developer's laptop (any OS). Runs only Vagrant and a
-  hypervisor. Untouched beyond that.
-- **VM layer** — Ubuntu 24.04 LTS virtual machine managed by Vagrant.
-  Created and configured automatically by `provision.sh`.
-- **Tooling layer** — language runtimes (Python, Node.js, Java), cloud CLIs
-  (AWS, Azure, GCP), IaC tools (Terraform, OpenTofu, kubectl), VS Code, and
-  developer tools — all installed inside the VM by Ansible.
-- **Services layer** — kv-backend's Docker Compose stack (MySQL, Cassandra,
-  Solr, RabbitMQ, Memcached, MailHog, Tomcat) running inside the VM.
-
-Details: [docs/architecture](./docs/architecture/README.md).
-
-## Repository Layout
-
-```text
-dev-environment/
-├── provision.sh             Single entry point — clone and run this
-├── README.md                Project entry point (this file)
-├── ARCHITECTURE.md          Repository philosophy and architectural rules
-├── LICENSE                  License terms
-├── CONTRIBUTING.md          Contribution workflow and standards
-├── CHANGELOG.md             Notable changes per release
-├── ROADMAP.md               Planned work and what is already built
-├── vm/                      VM definition and first-boot config
-│   ├── Vagrantfile          Multi-provider VM (VirtualBox / KVM / VMware)
-│   ├── cloud-init/          First-boot OS config (user, SSH, packages)
-│   └── scripts/             Helper scripts run inside the VM at boot
-├── ansible/                 All developer tool installation
-│   ├── playbook.yml         Main playbook — runs all roles in order
-│   ├── inventory/           Single-host local-connection inventory
-│   └── roles/               One role per tool: docker, java, node, python,
-│                              terraform, kubectl, cloud_clis,
-│                              developer_tools, kv_backend
-├── workstation-bootstrap/   Direct host install path (no VM required)
-│   ├── setup.sh             OS-aware entry point (macOS/Ubuntu/Fedora)
-│   ├── Makefile             kv-up, kv-init, kv-verify, kv-clean-slate, …
-│   └── scripts/             Per-stage install and verify scripts
-├── assets/                  Static assets (preload Docker images tarball)
-└── docs/                    All documentation, organized by concern
-    ├── architecture/        System design and technology decisions
-    ├── setup/               Per-tool reference guides and manual fallbacks
-    ├── automation/          How automation (Bash/Ansible/Compose) works
-    ├── runbooks/            Operational procedures (provision, DR, backup)
-    ├── troubleshooting/     Known issues and resolutions
-    ├── security/            Secrets and credential handling
-    └── decisions/           Architecture Decision Records (ADRs)
-```
-
-## Supported Platforms
-
-- **Host OS** (the laptop running `provision.sh`): macOS, Ubuntu, Debian, Fedora.
-- **VM OS**: Ubuntu 24.04 LTS (fixed — all developers get the same environment).
-- **Hypervisors**: VirtualBox (default), KVM/libvirt (Linux hosts), VMware Workstation/Fusion.
-- **Direct host install** (no VM, via `workstation-bootstrap/setup.sh`): macOS, Ubuntu, Debian, Fedora.
-
-## Quick Start — Single Command
-
-Prerequisites on the host laptop: **git** and **internet access**.
-Everything else (Vagrant, the hypervisor, Ubuntu, all developer tools)
-is installed automatically.
+A single command provisions a complete, reproducible Ubuntu development environment on any laptop.
 
 ```bash
-git clone https://github.com/allandzingo/dev-environment.git
+git clone https://github.com/<your-org>/dev-environment.git
 cd dev-environment
 ./provision.sh
 ```
 
-`provision.sh` will:
-1. Install **Vagrant** on the host.
-2. Try hypervisor backends in order (**VirtualBox → KVM → VMware**) until
-   one works — if one fails it destroys the partial VM and tries the next.
-3. Boot an **Ubuntu 24.04 LTS** VM (cloud image, no ISO needed).
-4. Run **cloud-init** on first boot and then an **Ansible playbook** that
-   installs every developer tool inside the VM.
-5. Pause once to show the VM's SSH public key — add it to your GitHub
-   account (Settings → SSH keys). This is the only manual step.
-6. Clone **kv-backend**, load Docker images, start all services.
-7. Print `✔ Developer workstation ready.`
-
-Options:
-
-```bash
-./provision.sh --cpu 6 --ram 12288   # more resources
-./provision.sh --destroy             # wipe VM and reprovision from scratch
-./provision.sh --skip-ansible        # boot VM only, skip tool install
-./provision.sh --help                # full usage
-```
-
-SSH into the running VM at any time:
-
-```bash
-cd vm && vagrant ssh
-```
-
-See [ROADMAP.md](./ROADMAP.md) for what was built and what is planned next.
+That is all. Everything else is automated.
 
 ---
 
-**Existing machine (no VM needed):** if you are already on Ubuntu, macOS, or
-Fedora, use [workstation-bootstrap/](./workstation-bootstrap/) directly:
+## What happens
+
+`provision.sh` runs in order:
+
+1. Detects your host OS (macOS, Ubuntu, Debian, Fedora)
+2. Installs Vagrant (if not present or version too old)
+3. Detects available hypervisors — VirtualBox → KVM → VMware — and selects the best one
+4. Creates an Ubuntu 24.04 LTS VM with the chosen hypervisor
+5. Runs an Ansible playbook that installs all developer tools inside the VM
+6. Pauses once to show the VM's SSH public key — add it to GitHub (the only manual step)
+7. Clones kv-backend, starts Docker services
+8. Verifies the environment and prints a summary
+
+Total time: approximately 15–25 minutes on first run.
+
+---
+
+## Prerequisites
+
+| What | Required |
+|------|----------|
+| git  | Yes — you used it to clone this repo |
+| curl or wget | Yes |
+| Internet access | Yes |
+
+Vagrant, the hypervisor, Ubuntu, and every developer tool are installed by the script.
+
+---
+
+## Options
 
 ```bash
-cd workstation-bootstrap
-./setup.sh      # installs git, docker, java 17, maven, node on the host
-make kv-up      # starts the kv-backend docker-compose stack
-make kv-init    # first-time DB/Cassandra/Solr init
-make kv-verify  # checks all services are reachable
+./provision.sh --cpu 6 --ram 12288   # more resources (default: 4 vCPU / 8 GB)
+./provision.sh --destroy             # wipe the VM and reprovision from scratch
+./provision.sh --skip-ansible        # boot the VM only, skip tool installation
+./provision.sh --help                # full usage
 ```
 
-## Documentation Index
+---
 
-| Area | Document |
-|---|---|
-| Philosophy | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| System design | [docs/architecture/README.md](./docs/architecture/README.md) |
-| Manual setup guides | [docs/setup/README.md](./docs/setup/README.md) |
-| Automation design | [docs/automation/README.md](./docs/automation/README.md) |
-| Operational runbooks | [docs/runbooks/README.md](./docs/runbooks/README.md) |
-| Troubleshooting | [docs/troubleshooting/README.md](./docs/troubleshooting/README.md) |
-| Security & secrets | [docs/security/README.md](./docs/security/README.md) |
-| Decision records | [docs/decisions/README.md](./docs/decisions/README.md) |
-| Direct host install (no VM) | [workstation-bootstrap/README.md](./workstation-bootstrap/README.md) |
+## After provisioning
 
-## Automation Roadmap
+```bash
+cd vm && vagrant ssh          # SSH into the VM
+cd vm && vagrant suspend      # suspend the VM
+cd vm && vagrant halt         # shut the VM down cleanly
+./provision.sh --destroy      # destroy and reprovision from scratch
+```
 
-Automation will be delivered in phases: Bash bootstrap scripts, Ansible roles
-per tool/service, and Docker Compose stacks for local services. Current
-status and planned phases are tracked in [ROADMAP.md](./ROADMAP.md).
+Inside the VM, the kv-backend services are managed via:
 
-## Technology Stack
+```bash
+cd ~/dev-environment/workstation-bootstrap
+make kv-up      # start MySQL, Cassandra, Solr, RabbitMQ, Memcached, Tomcat
+make kv-init    # first-time DB initialisation (run once)
+make kv-verify  # check all services are reachable
+make kv-down    # stop services
+```
+
+---
+
+## What is installed inside the VM
 
 | Category | Tools |
 |---|---|
-| VM OS | Ubuntu 24.04 LTS |
-| Containers | Docker, Podman (optional) |
-| Orchestration | Kubernetes |
-| Infrastructure as Code | Terraform, OpenTofu |
-| Version Control | Git, GitHub, SSH |
-| Languages/Runtimes | Python, Node.js, Java |
+| Version control | Git, GitHub CLI |
+| Containers | Docker, Docker Compose |
+| Java (kv-backend) | OpenJDK **8** and OpenJDK **17** — both coexist; switch with `sudo update-alternatives --config java` |
+| Build tool | Maven 3.9.x |
+| App server | **Tomcat 9** (Tomcat 10/11 are NOT installed — kv-backend compatibility) |
+| Node.js | nvm with Node 18, 20, 22 (default: 20); pnpm |
+| Python | pyenv with Python 3.12; pipenv, uv |
+| IaC | Terraform, kubectl, Helm |
 | Cloud CLIs | AWS CLI, Azure CLI, Google Cloud CLI |
-| IDEs | VS Code, JetBrains IDEs |
-| AI / Vector | Ollama, Open WebUI, Qdrant |
-| Data Stores | PostgreSQL, MySQL, MongoDB, Cassandra, Neo4j, Redis |
-| Messaging | RabbitMQ |
-| Automation | Bash, Ansible, Docker Compose |
+| Other | tmux, fzf, ripgrep, bat, httpie |
 
-Full rationale per tool is documented in [docs/architecture](./docs/architecture/README.md)
-and individual guides under [docs/setup](./docs/setup/README.md).
+---
 
-## Development Workflow
+## Supported host platforms
 
-Changes to this repository (documentation or, later, automation code) follow
-standard pull-request review. See [CONTRIBUTING.md](./CONTRIBUTING.md) for
-branching, commit, and review conventions.
+| Host OS | Hypervisor |
+|---------|-----------|
+| macOS   | VirtualBox (default), VMware Fusion |
+| Ubuntu / Debian | VirtualBox, KVM/libvirt (native, faster), VMware Workstation |
+| Fedora  | VirtualBox, KVM/libvirt (native, faster), VMware Workstation |
 
-## Contributing
+The provisioner detects what is available and selects automatically.
+You do not need to install or configure any hypervisor manually.
 
-Contributions are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before
-opening a pull request.
+---
 
-## License
+## Running without a VM (existing machine)
 
-Distributed under the terms in [LICENSE](./LICENSE).
+If you are already on Ubuntu, macOS, or Fedora and do not need a VM:
+
+```bash
+cd workstation-bootstrap
+./setup.sh
+make kv-up
+make kv-init
+make kv-verify
+```
+
+---
+
+## Version configuration
+
+All software versions are in one place: [`config.env`](./config.env).
+
+To upgrade a tool, change its version there.
+Ansible reads versions from [`ansible/group_vars/all/versions.yml`](./ansible/group_vars/all/versions.yml) — keep both files in sync.
+
+---
+
+## Documentation
+
+| Topic | Link |
+|---|---|
+| Architecture and design | [docs/architecture/README.md](./docs/architecture/README.md) |
+| Per-tool setup guides | [docs/setup/README.md](./docs/setup/README.md) |
+| Operational runbooks | [docs/runbooks/README.md](./docs/runbooks/README.md) |
+| Troubleshooting | [docs/troubleshooting/README.md](./docs/troubleshooting/README.md) |
+| Security and secrets | [docs/security/README.md](./docs/security/README.md) |
+| Architecture decisions | [docs/decisions/README.md](./docs/decisions/README.md) |
+| Direct host install | [workstation-bootstrap/README.md](./workstation-bootstrap/README.md) |
+
+---
+
+## Idempotency
+
+Re-running `./provision.sh` is safe. The provisioner:
+
+- reuses an existing VM if it is already running
+- skips tools that are already installed
+- never duplicates installations
+- never destroys user data unless `--destroy` is passed explicitly

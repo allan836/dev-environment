@@ -1,20 +1,24 @@
 ---
+# =============================================================================
 # Role: kubectl
-# Installs kubectl (Kubernetes CLI) via the official Kubernetes apt repo.
-# Also installs k9s (terminal UI for Kubernetes) and Helm.
+#
+# Installs kubectl via the official Kubernetes apt repository.
+# Also installs k9s (Kubernetes TUI) and Helm.
+# Channel version is read from group_vars/all/versions.yml (kubectl_channel).
+# =============================================================================
 
-- name: Install Kubernetes GPG key
+- name: Install Kubernetes apt repository GPG key
   ansible.builtin.shell:
     cmd: |
-      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+      curl -fsSL "https://pkgs.k8s.io/core:/stable:/{{ kubectl_channel }}/deb/Release.key" \
         | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-- name: Add Kubernetes apt repository
+- name: Add Kubernetes apt repository (channel {{ kubectl_channel }})
   ansible.builtin.shell:
     cmd: |
-      echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
-        https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' \
+      echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+        https://pkgs.k8s.io/core:/stable:/{{ kubectl_channel }}/deb/ /" \
         > /etc/apt/sources.list.d/kubernetes.list
     creates: /etc/apt/sources.list.d/kubernetes.list
 
@@ -32,9 +36,9 @@
 
 - name: Print kubectl version
   ansible.builtin.debug:
-    msg: "{{ kubectl_version.stdout }}"
+    msg: "{{ kubectl_version.stdout | default('kubectl not found') }}"
 
-# ---- k9s -------------------------------------------------------------------
+# ---- k9s (Kubernetes TUI) --------------------------------------------------
 
 - name: Check if k9s is installed
   ansible.builtin.command: which k9s
@@ -42,18 +46,32 @@
   changed_when: false
   failed_when: false
 
-- name: Install k9s (Kubernetes TUI)
+- name: Get latest k9s release version
+  ansible.builtin.shell:
+    cmd: |
+      curl -s https://api.github.com/repos/derailed/k9s/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4
+    executable: /bin/bash
+  register: k9s_latest
+  changed_when: false
+  when: k9s_check.rc != 0
+  ignore_errors: true
+
+- name: Install k9s
   ansible.builtin.shell:
     cmd: |
       ARCH=$(dpkg --print-architecture)
-      VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest \
-        | grep '"tag_name"' | cut -d'"' -f4)
+      VERSION="{{ k9s_latest.stdout | default('') }}"
+      if [[ -z "$VERSION" ]]; then
+        echo "Could not determine k9s version — skipping."
+        exit 0
+      fi
       curl -fsSL "https://github.com/derailed/k9s/releases/download/${VERSION}/k9s_linux_${ARCH}.deb" \
         -o /tmp/k9s.deb
       dpkg -i /tmp/k9s.deb
       rm -f /tmp/k9s.deb
     executable: /bin/bash
-  when: k9s_check.rc != 0
+  when: k9s_check.rc != 0 and k9s_latest is not failed
   ignore_errors: true
 
 # ---- Helm ------------------------------------------------------------------
@@ -64,7 +82,7 @@
   changed_when: false
   failed_when: false
 
-- name: Install Helm
+- name: Install Helm via official script
   ansible.builtin.shell:
     cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
     executable: /bin/bash

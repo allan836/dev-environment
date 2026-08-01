@@ -1,0 +1,170 @@
+---
+# =============================================================================
+# Role: tomcat
+#
+# Installs Apache Tomcat 9 from the official Apache archive.
+#
+# CRITICAL — kv-backend compatibility:
+#   ONLY Tomcat 9 is installed. Tomcat 10 and 11 are NOT installed.
+#   Tomcat 10+ changed the Jakarta namespace, breaking kv-backend.
+#
+# Version is read from group_vars/all/versions.yml (tomcat_version).
+#
+# Installation layout:
+#   /opt/tomcat9/         — Tomcat installation
+#   /etc/systemd/system/tomcat9.service — systemd unit
+#   Runs as dedicated 'tomcat' system user.
+# =============================================================================
+
+# ---- Tomcat system user ---------------------------------------------------
+
+- name: Create tomcat system group
+  ansible.builtin.group:
+    name: "{{ tomcat_user }}"
+    system: true
+    state: present
+
+- name: Create tomcat system user
+  ansible.builtin.user:
+    name: "{{ tomcat_user }}"
+    group: "{{ tomcat_user }}"
+    system: true
+    shell: /bin/false
+    home: "{{ tomcat_install_dir }}"
+    create_home: false
+    comment: "Apache Tomcat"
+    state: present
+
+# ---- Download and install --------------------------------------------------
+
+- name: Check if Tomcat {{ tomcat_version }} is already installed
+  ansible.builtin.stat:
+    path: "{{ tomcat_install_dir }}/bin/catalina.sh"
+  register: catalina_sh
+
+- name: Create Tomcat install directory
+  ansible.builtin.file:
+    path: "{{ tomcat_install_dir }}"
+    state: directory
+    owner: "{{ tomcat_user }}"
+    group: "{{ tomcat_user }}"
+    mode: "0755"
+  when: not catalina_sh.stat.exists
+
+- name: Download Tomcat {{ tomcat_version }}
+  ansible.builtin.get_url:
+    url: "{{ tomcat_archive_url }}"
+    dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    mode: "0644"
+  when: not catalina_sh.stat.exists
+
+- name: Extract Tomcat {{ tomcat_version }} into {{ tomcat_install_dir }}
+  ansible.builtin.unarchive:
+    src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    dest: "{{ tomcat_install_dir }}"
+    remote_src: true
+    extra_opts: ["--strip-components=1"]
+    owner: "{{ tomcat_user }}"
+    group: "{{ tomcat_user }}"
+  when: not catalina_sh.stat.exists
+
+- name: Clean up Tomcat archive
+  ansible.builtin.file:
+    path: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+    state: absent
+  ignore_errors: true
+
+# ---- Permissions -----------------------------------------------------------
+
+- name: Set ownership on Tomcat installation
+  ansible.builtin.file:
+    path: "{{ tomcat_install_dir }}"
+    state: directory
+    owner: "{{ tomcat_user }}"
+    group: "{{ tomcat_user }}"
+    recurse: true
+
+- name: Make Tomcat shell scripts executable
+  ansible.builtin.shell:
+    cmd: "chmod +x {{ tomcat_install_dir }}/bin/*.sh"
+  changed_when: false
+
+# ---- Systemd service -------------------------------------------------------
+
+- name: Find JAVA_HOME for Java 17
+  ansible.builtin.shell:
+    cmd: "dirname $(dirname $(readlink -f $(which java)))"
+  register: java_home_result
+  changed_when: false
+  ignore_errors: true
+
+- name: Write tomcat9 systemd service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/tomcat9.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Apache Tomcat 9 Web Application Server
+      After=network.target
+
+      [Service]
+      Type=forking
+      User={{ tomcat_user }}
+      Group={{ tomcat_user }}
+
+      Environment="JAVA_HOME={{ java_home_result.stdout | default('/usr/lib/jvm/java-17-openjdk-amd64') }}"
+      Environment="CATALINA_HOME={{ tomcat_install_dir }}"
+      Environment="CATALINA_BASE={{ tomcat_install_dir }}"
+      Environment="CATALINA_PID={{ tomcat_install_dir }}/temp/tomcat.pid"
+      Environment="CATALINA_OPTS=-Xms512m -Xmx1024m -server -XX:+UseParallelGC"
+
+      ExecStart={{ tomcat_install_dir }}/bin/startup.sh
+      ExecStop={{ tomcat_install_dir }}/bin/shutdown.sh
+
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start Tomcat 9
+  ansible.builtin.systemd:
+    name: tomcat9
+    enabled: true
+    state: started
+
+# ---- Add developer user to tomcat group -----------------------------------
+
+- name: Add developer user to tomcat group
+  ansible.builtin.user:
+    name: "{{ dev_user }}"
+    groups: "{{ tomcat_user }}"
+    append: true
+
+# ---- Verify ----------------------------------------------------------------
+
+- name: Verify Tomcat 9 is running
+  ansible.builtin.command: systemctl is-active tomcat9
+  register: tomcat_status
+  changed_when: false
+  ignore_errors: true
+
+- name: Print Tomcat 9 status
+  ansible.builtin.debug:
+    msg: "Tomcat 9 status: {{ tomcat_status.stdout | default('unknown') }} — version {{ tomcat_version }} at {{ tomcat_install_dir }}"
+
+- name: Check Tomcat HTTP port 8080 is listening
+  ansible.builtin.wait_for:
+    port: 8080
+    host: localhost
+    timeout: 30
+    state: started
+  ignore_errors: true
+  register: tomcat_port_check
+
+- name: Print Tomcat port status
+  ansible.builtin.debug:
+    msg: "{{ 'Tomcat 9 is listening on port 8080' if tomcat_port_check is not failed else 'WARNING: port 8080 not yet open — check Tomcat logs at ' + tomcat_install_dir + '/logs/catalina.out' }}"

@@ -1,7 +1,10 @@
 ---
+# =============================================================================
 # Role: python
-# Installs pyenv (Python version manager), pipenv, and uv.
-# Mirrors install-runtimes.sh Python block.
+#
+# Installs Python via pyenv, plus pipenv and uv.
+# Version is read from group_vars/all/versions.yml (python_version).
+# =============================================================================
 
 - name: Install pyenv build dependencies
   ansible.builtin.apt:
@@ -38,7 +41,7 @@
     HOME: "{{ dev_home }}"
   when: not pyenv_bin.stat.exists
 
-- name: Add pyenv to .bashrc
+- name: Add pyenv initialisation to .bashrc
   ansible.builtin.blockinfile:
     path: "{{ dev_home }}/.bashrc"
     marker: "# {mark} ANSIBLE MANAGED — pyenv"
@@ -52,27 +55,27 @@
   become: false
   become_user: "{{ dev_user }}"
 
-- name: Install Python 3.12 via pyenv
+- name: Install Python {{ python_version }} via pyenv
   ansible.builtin.shell:
     cmd: |
       export PYENV_ROOT="{{ dev_home }}/.pyenv"
       export PATH="$PYENV_ROOT/bin:$PATH"
       eval "$(pyenv init -)"
-      pyenv install -s 3.12.0
-      pyenv global 3.12.0
+      pyenv install -s {{ python_version }}
+      pyenv global {{ python_version }}
     executable: /bin/bash
   become: false
   become_user: "{{ dev_user }}"
   environment:
     HOME: "{{ dev_home }}"
 
-- name: Install pipenv and uv via pip
+- name: Install pipenv and uv
   ansible.builtin.shell:
     cmd: |
       export PYENV_ROOT="{{ dev_home }}/.pyenv"
       export PATH="$PYENV_ROOT/bin:$PATH"
       eval "$(pyenv init -)"
-      pip3 install --user "pipenv>=2026.0.2" || pip3 install --user pipenv
+      pip3 install --user pipenv || true
       if ! command -v uv >/dev/null 2>&1; then
         curl -LsSf https://astral.sh/uv/install.sh | sh
       fi
@@ -82,7 +85,7 @@
   environment:
     HOME: "{{ dev_home }}"
 
-- name: Verify Python installation
+- name: Verify Python version
   ansible.builtin.shell:
     cmd: |
       export PYENV_ROOT="{{ dev_home }}/.pyenv"
@@ -94,9 +97,9 @@
   become_user: "{{ dev_user }}"
   environment:
     HOME: "{{ dev_home }}"
-  register: python_version
+  register: python_version_check
   changed_when: false
 
 - name: Print Python version
   ansible.builtin.debug:
-    msg: "{{ python_version.stdout }}"
+    msg: "{{ python_version_check.stdout }}"

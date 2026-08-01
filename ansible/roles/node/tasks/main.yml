@@ -1,8 +1,14 @@
 ---
+# =============================================================================
 # Role: node
-# Installs Node.js via nvm (versions 18, 20, 22, 24; default: 20).
-# Also installs pnpm.
-# Mirrors install-runtimes.sh nvm block.
+#
+# Installs Node.js via nvm (Node Version Manager).
+# Versions are read from group_vars/all/versions.yml.
+#
+# Installed Node versions: see node_versions var (default: 18, 20, 22)
+# Default Node version:    see node_default var (default: 20)
+# Also installs: pnpm
+# =============================================================================
 
 - name: Check if nvm is already installed
   ansible.builtin.stat:
@@ -11,9 +17,9 @@
   become: false
   become_user: "{{ dev_user }}"
 
-- name: Install nvm
+- name: Install nvm {{ nvm_version }}
   ansible.builtin.shell:
-    cmd: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    cmd: "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v{{ nvm_version }}/install.sh | bash"
     executable: /bin/bash
   become: false
   become_user: "{{ dev_user }}"
@@ -21,15 +27,15 @@
     HOME: "{{ dev_home }}"
   when: not nvm_sh.stat.exists
 
-- name: Install Node.js LTS versions (18, 20, 22, 24)
+- name: Install Node.js versions {{ node_versions | join(', ') }}
   ansible.builtin.shell:
     cmd: |
       export NVM_DIR="{{ dev_home }}/.nvm"
       [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-      for v in 18 20 22 24; do
-        nvm install "$v" >/dev/null
-      done
-      nvm alias default 20
+      {% for v in node_versions %}
+      nvm install {{ v }} >/dev/null
+      {% endfor %}
+      nvm alias default {{ node_default }}
     executable: /bin/bash
   become: false
   become_user: "{{ dev_user }}"
@@ -50,7 +56,7 @@
   environment:
     HOME: "{{ dev_home }}"
 
-- name: Verify node installation
+- name: Verify Node.js default version
   ansible.builtin.shell:
     cmd: |
       export NVM_DIR="{{ dev_home }}/.nvm"
@@ -64,6 +70,6 @@
   register: node_version
   changed_when: false
 
-- name: Print Node version
+- name: Print Node.js version
   ansible.builtin.debug:
-    msg: "{{ node_version.stdout }}"
+    msg: "Node.js default: {{ node_version.stdout }}"
