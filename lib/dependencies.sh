@@ -36,44 +36,109 @@ _vagrant_version_ok() {
 }
 
 # --------------------------------------------------------------------------- #
+# _vagrant_candidate_versions
+# Emits an ordered list of Vagrant versions to try:
+#   1. The version pinned in config.env (VAGRANT_INSTALL_VERSION)
+#   2. The latest stable version from the HashiCorp checkpoint API
+#   3. A small set of known-good fallback versions
+# Duplicates are filtered out while preserving order.
+# --------------------------------------------------------------------------- #
+_vagrant_candidate_versions() {
+  local candidates=()
+  candidates+=("${VAGRANT_INSTALL_VERSION}")
+
+  local checkpoint_ver
+  checkpoint_ver=$(curl -fsSL --max-time 8 \
+    "https://checkpoint-api.hashicorp.com/v1/check/vagrant" 2>/dev/null \
+    | grep -oP '"current_version"\s*:\s*"\K[^"]+' || true)
+  [[ -n "$checkpoint_ver" ]] && candidates+=("$checkpoint_ver")
+
+  candidates+=("2.4.1" "2.4.0" "2.3.7")
+
+  local seen=()
+  for v in "${candidates[@]}"; do
+    local dup=0
+    for s in "${seen[@]:-}"; do [[ "$s" == "$v" ]] && dup=1 && break; done
+    [[ $dup -eq 0 ]] && seen+=("$v") && echo "$v"
+  done
+}
+
+# --------------------------------------------------------------------------- #
+# _try_download
+# Attempts to download $2 to $3 using curl.
+# Returns 0 on success, 1 on any error (including HTTP 404).
+# --------------------------------------------------------------------------- #
+_try_download() {
+  local label="$1" url="$2" dest="$3"
+  info "  Trying ${label} → ${url}"
+  if curl -fsSL --max-time 120 "$url" -o "$dest" 2>>"$LOG_FILE"; then
+    return 0
+  fi
+  warn "  ✘ ${label} not available at that URL (404 or network error). Trying next..."
+  rm -f "$dest"
+  return 1
+}
+
+# --------------------------------------------------------------------------- #
 # _install_vagrant_archive
-# Downloads and installs a specific Vagrant release from HashiCorp.
-# Used when the package-manager version is too old.
+# Downloads and installs a Vagrant release from HashiCorp.
+# Tries multiple candidate versions in order; moves to the next on 404.
 # --------------------------------------------------------------------------- #
 _install_vagrant_archive() {
-  local ver="${VAGRANT_INSTALL_VERSION}"
   local arch; arch="$(uname -m)"
   local pkg_arch="amd64"
   [[ "$arch" == "aarch64" || "$arch" == "arm64" ]] && pkg_arch="arm64"
 
-  info "Downloading Vagrant ${ver} from HashiCorp releases..."
+  info "Resolving Vagrant download candidates..."
+  local versions=()
+  while IFS= read -r v; do versions+=("$v"); done < <(_vagrant_candidate_versions)
+
+  local installed=false ver url dest
 
   case "$HOST_OS" in
     fedora|rhel)
-      local rpm="vagrant-${ver}-1.${pkg_arch}.rpm"
-      local url="https://releases.hashicorp.com/vagrant/${ver}/${rpm}"
-      curl -fsSL "$url" -o "/tmp/${rpm}" \
-        || die "Failed to download Vagrant RPM from ${url}"
-      sudo rpm -Uvh "/tmp/${rpm}" 2>&1 | tee -a "$LOG_FILE"
-      rm -f "/tmp/${rpm}"
+      for ver in "${versions[@]}"; do
+        dest="/tmp/vagrant-${ver}.rpm"
+        url="https://releases.hashicorp.com/vagrant/${ver}/vagrant-${ver}-1.${pkg_arch}.rpm"
+        if _try_download "Vagrant ${ver} RPM" "$url" "$dest"; then
+          info "  Installing Vagrant ${ver} via rpm..."
+          sudo rpm -Uvh "$dest" 2>&1 | tee -a "$LOG_FILE"
+          rm -f "$dest"
+          installed=true
+          break
+        fi
+      done
       ;;
     mac)
-      local dmg="vagrant_${ver}_darwin_${pkg_arch}.dmg"
-      local url="https://releases.hashicorp.com/vagrant/${ver}/${dmg}"
-      curl -fsSL "$url" -o "/tmp/${dmg}" \
-        || die "Failed to download Vagrant DMG from ${url}"
-      warn "Please open /tmp/${dmg} and run the installer, then press Enter."
-      read -rp ""
+      for ver in "${versions[@]}"; do
+        dest="/tmp/vagrant-${ver}.dmg"
+        url="https://releases.hashicorp.com/vagrant/${ver}/vagrant_${ver}_darwin_${pkg_arch}.dmg"
+        if _try_download "Vagrant ${ver} DMG" "$url" "$dest"; then
+          warn "Please open ${dest} and run the installer, then press Enter."
+          read -rp ""
+          installed=true
+          break
+        fi
+      done
       ;;
     *)
-      local deb="vagrant_${ver}-1_${pkg_arch}.deb"
-      local url="https://releases.hashicorp.com/vagrant/${ver}/${deb}"
-      curl -fsSL "$url" -o "/tmp/${deb}" \
-        || die "Failed to download Vagrant DEB from ${url}"
-      sudo dpkg -i "/tmp/${deb}" 2>&1 | tee -a "$LOG_FILE"
-      rm -f "/tmp/${deb}"
+      for ver in "${versions[@]}"; do
+        dest="/tmp/vagrant-${ver}.deb"
+        url="https://releases.hashicorp.com/vagrant/${ver}/vagrant_${ver}-1_${pkg_arch}.deb"
+        if _try_download "Vagrant ${ver} DEB" "$url" "$dest"; then
+          info "  Installing Vagrant ${ver} via dpkg..."
+          sudo dpkg -i "$dest" 2>&1 | tee -a "$LOG_FILE"
+          rm -f "$dest"
+          installed=true
+          break
+        fi
+      done
       ;;
   esac
+
+  if [[ "$installed" != "true" ]]; then
+    die "All Vagrant download candidates failed. Check ${LOG_FILE} or download manually from https://developer.hashicorp.com/vagrant/downloads"
+  fi
 }
 
 # --------------------------------------------------------------------------- #
