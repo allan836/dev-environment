@@ -1,0 +1,74 @@
+---
+# Role: java
+# Installs Java 17 (primary) and Java 8 (compatibility) via SDKMAN.
+# Also installs Maven 3.8.x.
+# Mirrors install-runtimes.sh SDKMAN block.
+
+- name: Check if SDKMAN is already installed
+  ansible.builtin.stat:
+    path: "{{ dev_home }}/.sdkman/bin/sdkman-init.sh"
+  register: sdkman_init
+  become: false
+  become_user: "{{ dev_user }}"
+
+- name: Install SDKMAN
+  ansible.builtin.shell:
+    cmd: curl -s "https://get.sdkman.io" | bash
+  args:
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  when: not sdkman_init.stat.exists
+
+- name: Install Java 8 (Amazon Corretto) via SDKMAN
+  ansible.builtin.shell:
+    cmd: |
+      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
+      sdk install java 8.0.442-amzn <<< "n" || true
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Install Java 17 (Oracle) via SDKMAN and set as default
+  ansible.builtin.shell:
+    cmd: |
+      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
+      sdk install java 17.0.12-oracle <<< "n" || true
+      sdk default java 17.0.12-oracle
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Install Maven 3.8.8 via SDKMAN
+  ansible.builtin.shell:
+    cmd: |
+      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
+      sdk install maven 3.8.8 <<< "n" || true
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Verify Java installation
+  ansible.builtin.shell:
+    cmd: |
+      source {{ dev_home }}/.sdkman/bin/sdkman-init.sh
+      java -version 2>&1
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  register: java_version
+  changed_when: false
+
+- name: Print Java version
+  ansible.builtin.debug:
+    msg: "{{ java_version.stdout }}"

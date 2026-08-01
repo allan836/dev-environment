@@ -1,0 +1,93 @@
+#cloud-config
+# =============================================================================
+# cloud-init user-data — Developer Environment VM
+#
+# PURPOSE:
+#   Runs once on the very first boot of the Ubuntu cloud image.
+#   Handles everything that must be in place BEFORE Ansible runs:
+#     - System locale and timezone
+#     - Developer user account with sudo
+#     - SSH authorized key (populated by provision.sh at build time)
+#     - Base packages needed to pull and run Ansible
+#     - Hostname
+#
+#   All developer tool installation (Docker, Java, Node, Terraform, etc.)
+#   is intentionally left to Ansible so it can be re-run idempotently.
+#
+# TEMPLATING:
+#   provision.sh rewrites the SSH_AUTHORIZED_KEY placeholder below with the
+#   developer's actual public key before the VM boots.
+# =============================================================================
+
+# ---- Locale & timezone ----------------------------------------------------
+locale:    en_US.UTF-8
+timezone:  Africa/Johannesburg
+
+# ---- Hostname --------------------------------------------------------------
+hostname:        dev-env
+fqdn:            dev-env.local
+manage_etc_hosts: true
+
+# ---- Developer user --------------------------------------------------------
+users:
+  - name:               developer
+    gecos:              Developer
+    shell:              /bin/bash
+    sudo:               ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd:        false
+    # SSH_AUTHORIZED_KEY is replaced by provision.sh with the real public key.
+    # Leave this line as-is if running cloud-init manually; add your key here.
+    ssh_authorized_keys:
+      - "SSH_AUTHORIZED_KEY"
+
+# ---- Base packages (minimal: only what Ansible itself needs) ---------------
+packages:
+  - git
+  - curl
+  - wget
+  - python3
+  - python3-pip
+  - python3-venv
+  - ansible
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - apt-transport-https
+  - software-properties-common
+  - unzip
+  - zip
+  - jq
+  - htop
+  - vim
+  - bash-completion
+  - net-tools
+
+package_update:  true
+package_upgrade: true
+
+# ---- Filesystem resize (cloud images boot small; grow to allocated disk) ---
+growpart:
+  mode:    auto
+  devices: ["/"]
+resize_rootfs: true
+
+# ---- First-boot commands ---------------------------------------------------
+runcmd:
+  # Ensure developer user owns their home
+  - [chown, -R, "developer:developer", "/home/developer"]
+  # Enable passwordless sudo for developer (belt-and-suspenders with cloud-config above)
+  - [bash, -c, "echo 'developer ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/developer"]
+  - [chmod, "0440", "/etc/sudoers.d/developer"]
+  # Create standard workspace directory structure
+  - [sudo, -u, developer, mkdir, -p, "/home/developer/workspace/repos"]
+  # Disable cloud-init on subsequent boots (it has done its job)
+  - [touch, /etc/cloud/cloud-init.disabled]
+  # Signal that cloud-init has finished
+  - [bash, -c, "echo 'cloud-init: first boot complete' > /tmp/cloud-init-done"]
+
+# ---- Final message (visible in `vagrant ssh` welcome) ----------------------
+final_message: |
+  ============================================================
+   Dev environment VM is ready (cloud-init complete).
+   Ansible provisioning is next — it installs all dev tools.
+  ============================================================

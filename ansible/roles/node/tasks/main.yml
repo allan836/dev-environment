@@ -1,0 +1,69 @@
+---
+# Role: node
+# Installs Node.js via nvm (versions 18, 20, 22, 24; default: 20).
+# Also installs pnpm.
+# Mirrors install-runtimes.sh nvm block.
+
+- name: Check if nvm is already installed
+  ansible.builtin.stat:
+    path: "{{ dev_home }}/.nvm/nvm.sh"
+  register: nvm_sh
+  become: false
+  become_user: "{{ dev_user }}"
+
+- name: Install nvm
+  ansible.builtin.shell:
+    cmd: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  when: not nvm_sh.stat.exists
+
+- name: Install Node.js LTS versions (18, 20, 22, 24)
+  ansible.builtin.shell:
+    cmd: |
+      export NVM_DIR="{{ dev_home }}/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+      for v in 18 20 22 24; do
+        nvm install "$v" >/dev/null
+      done
+      nvm alias default 20
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Install pnpm
+  ansible.builtin.shell:
+    cmd: |
+      export NVM_DIR="{{ dev_home }}/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+      if ! command -v pnpm >/dev/null 2>&1; then
+        curl -fsSL https://get.pnpm.io/install.sh | sh -
+      fi
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Verify node installation
+  ansible.builtin.shell:
+    cmd: |
+      export NVM_DIR="{{ dev_home }}/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+      node --version
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  register: node_version
+  changed_when: false
+
+- name: Print Node version
+  ansible.builtin.debug:
+    msg: "{{ node_version.stdout }}"

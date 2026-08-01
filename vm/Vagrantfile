@@ -1,0 +1,144 @@
+# =============================================================================
+# Vagrantfile — Developer Environment VM
+#
+# This file is NOT meant to be run directly with `vagrant up`.
+# It is invoked by provision.sh which selects the --provider automatically
+# based on what is available on the host machine.
+#
+# Manual usage (if you want to drive Vagrant yourself):
+#   cd vm
+#   vagrant up --provider=virtualbox
+#   vagrant up --provider=libvirt
+#   vagrant up --provider=vmware_desktop
+#
+# Environment variables (set by provision.sh):
+#   VAGRANT_VM_NAME   VM name            (default: dev-env)
+#   VAGRANT_VM_CPU    Number of vCPUs    (default: 4)
+#   VAGRANT_VM_RAM    RAM in MB          (default: 8192)
+# =============================================================================
+
+VM_NAME  = ENV.fetch("VAGRANT_VM_NAME", "dev-env")
+VM_CPU   = ENV.fetch("VAGRANT_VM_CPU",  "4").to_i
+VM_RAM   = ENV.fetch("VAGRANT_VM_RAM",  "8192").to_i
+
+# Ubuntu 24.04 LTS (Noble Numbat) — official Vagrant Cloud boxes.
+# Each provider uses the best-maintained box for that backend.
+BOXES = {
+  "virtualbox"    => "ubuntu/noble64",
+  "libvirt"       => "generic/ubuntu2404",
+  "vmware_desktop"=> "bento/ubuntu-24.04",
+}
+
+Vagrant.configure("2") do |config|
+
+  # ---- SSH ---------------------------------------------------------------
+  config.ssh.insert_key      = true
+  config.ssh.forward_agent   = false
+
+  # ---- Shared folder -----------------------------------------------------
+  # Mount the entire dev-environment repo into the VM so scripts, Ansible
+  # playbooks, and configs are immediately available without copying.
+  config.vm.synced_folder "..", "/home/vagrant/dev-environment",
+    create: true
+
+  # ---- Network -----------------------------------------------------------
+  # Private network with a static IP: Ansible uses this to talk to the VM.
+  config.vm.network "private_network", ip: "192.168.56.10"
+
+  # ---- VirtualBox --------------------------------------------------------
+  config.vm.provider "virtualbox" do |vb, override|
+    override.vm.box    = BOXES["virtualbox"]
+    vb.name            = VM_NAME
+    vb.memory          = VM_RAM
+    vb.cpus            = VM_CPU
+    vb.linked_clone    = false
+    # Disable audio and USB — not needed for a headless dev server
+    vb.customize ["modifyvm", :id, "--audio",    "none"]
+    vb.customize ["modifyvm", :id, "--usb",      "off"]
+    vb.customize ["modifyvm", :id, "--usbehci",  "off"]
+    # Better networking performance
+    vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+    vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+    # Increase VM disk to configured size (requires VBoxManage resize if box is small)
+    vb.customize ["modifyvm", :id, "--vram", "16"]
+  end
+
+  # ---- KVM / libvirt -----------------------------------------------------
+  config.vm.provider "libvirt" do |lv, override|
+    override.vm.box  = BOXES["libvirt"]
+    lv.memory        = VM_RAM
+    lv.cpus          = VM_CPU
+    lv.disk_bus      = "virtio"
+    lv.nic_model_type= "virtio"
+    lv.machine_type  = "q35"
+    # Enable nested virtualisation (useful if running Docker inside the VM)
+    lv.nested        = true
+    lv.cpu_mode      = "host-passthrough"
+    lv.graphics_type = "none"
+    lv.video_type    = "vga"
+  end
+
+  # ---- VMware Workstation / Fusion ---------------------------------------
+  config.vm.provider "vmware_desktop" do |vmw, override|
+    override.vm.box      = BOXES["vmware_desktop"]
+    vmw.vmx["memsize"]   = VM_RAM.to_s
+    vmw.vmx["numvcpus"]  = VM_CPU.to_s
+    vmw.vmx["displayName"]= VM_NAME
+    # Enable nested virtualisation for Docker
+    vmw.vmx["vhv.enable"] = "TRUE"
+    vmw.gui              = false
+  end
+
+  # ---- Cloud-init seed ---------------------------------------------------
+  # Upload cloud-init user-data into the VM on first boot.
+  # This handles: hostname, timezone, initial packages, and user shell setup.
+  if File.exist?(File.join(File.dirname(__FILE__), "cloud-init", "user-data"))
+    config.vm.provision "file",
+      source:      "cloud-init/user-data",
+      destination: "/tmp/cloud-init-user-data.yml"
+    config.vm.provision "shell", inline: <<-SHELL
+      if command -v cloud-init >/dev/null 2>&1; then
+        sudo cloud-init clean --logs 2>/dev/null || true
+        sudo cp /tmp/cloud-init-user-data.yml /etc/cloud/cloud.cfg.d/99-dev-env.cfg
+        sudo cloud-init init   --local 2>/dev/null || true
+        sudo cloud-init modules --mode=config 2>/dev/null || true
+        sudo cloud-init modules --mode=final  2>/dev/null || true
+      fi
+    SHELL
+  end
+
+  # ---- Inline first-boot shell setup ------------------------------------
+  # Ensures the VM is ready before Ansible runs.  This is intentionally
+  # minimal — all real tool installation is done by Ansible.
+  config.vm.provision "shell", inline: <<-SHELL
+    set -euo pipefail
+    export DEBIAN_FRONTEND=noninteractive
+
+    echo "==> Updating apt cache..."
+    apt-get update -qq
+
+    echo "==> Installing Ansible and Python..."
+    apt-get install -y ansible python3 python3-pip git curl wget 2>&1 | tail -5
+
+    echo "==> Setting hostname..."
+    hostnamectl set-hostname dev-env 2>/dev/null || true
+
+    echo "==> Installing vm guest additions / open-vm-tools..."
+    apt-get install -y open-vm-tools 2>/dev/null || true
+
+    echo "==> First-boot shell setup complete."
+  SHELL
+
+  # ---- Ansible provisioner (runs after shell setup) ---------------------
+  # Vagrant's built-in Ansible provisioner runs the full dev tool playbook.
+  config.vm.provision "ansible_local" do |ansible|
+    ansible.playbook          = "dev-environment/ansible/playbook.yml"
+    ansible.inventory_path    = "dev-environment/ansible/inventory/hosts.yml"
+    ansible.limit             = "all"
+    ansible.verbose           = false
+    ansible.extra_vars        = {
+      dev_user: ENV.fetch("USER", "vagrant")
+    }
+  end
+
+end

@@ -1,0 +1,129 @@
+---
+# Role: developer_tools
+# Installs: VS Code, GitHub CLI, Git config, DBeaver, OpenVPN/openfortivpn,
+# and shell quality-of-life tools.
+
+# ---- GitHub CLI ------------------------------------------------------------
+
+- name: Install GitHub CLI GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    creates: /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+- name: Add GitHub CLI apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
+        https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list
+    creates: /etc/apt/sources.list.d/github-cli.list
+
+- name: Install GitHub CLI
+  ansible.builtin.apt:
+    name: gh
+    update_cache: true
+    state: present
+
+# ---- VS Code (headless server, usable via SSH remote extension) ------------
+
+- name: Install VS Code GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/microsoft-vscode.gpg
+    creates: /etc/apt/keyrings/microsoft-vscode.gpg
+
+- name: Add VS Code apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft-vscode.gpg] \
+        https://packages.microsoft.com/repos/code stable main" \
+        > /etc/apt/sources.list.d/vscode.list
+    creates: /etc/apt/sources.list.d/vscode.list
+
+- name: Install VS Code
+  ansible.builtin.apt:
+    name: code
+    update_cache: true
+    state: present
+  ignore_errors: true
+
+# ---- Git global config -----------------------------------------------------
+
+- name: Configure Git user name
+  ansible.builtin.command:
+    cmd: git config --global user.name "Developer"
+  become: false
+  become_user: "{{ dev_user }}"
+  changed_when: false
+
+- name: Configure Git default branch
+  ansible.builtin.command:
+    cmd: git config --global init.defaultBranch main
+  become: false
+  become_user: "{{ dev_user }}"
+  changed_when: false
+
+- name: Configure Git pull strategy
+  ansible.builtin.command:
+    cmd: git config --global pull.rebase false
+  become: false
+  become_user: "{{ dev_user }}"
+  changed_when: false
+
+# ---- openfortivpn (FortiClient VPN — CLI version) -------------------------
+
+- name: Install openfortivpn
+  ansible.builtin.apt:
+    name: openfortivpn
+    state: present
+  ignore_errors: true
+
+# NOTE: FortiClient GUI requires a Fortinet account/licence and cannot be
+# installed automatically. openfortivpn is the open-source CLI alternative
+# that works with the same VPN gateways. If your org requires the full
+# FortiClient GUI, download it from:
+#   https://www.fortinet.com/support/product-downloads
+# and install the .deb manually after provisioning.
+
+# ---- Shell tools -----------------------------------------------------------
+
+- name: Install useful shell tools
+  ansible.builtin.apt:
+    name:
+      - tmux
+      - fzf
+      - ripgrep
+      - tree
+      - ncdu
+      - bat
+      - fd-find
+      - httpie
+      - make
+    state: present
+  ignore_errors: true
+
+# ---- DBeaver Community (database GUI) -------------------------------------
+
+- name: Check if DBeaver is installed
+  ansible.builtin.command: which dbeaver
+  register: dbeaver_check
+  changed_when: false
+  failed_when: false
+
+- name: Install DBeaver Community
+  ansible.builtin.shell:
+    cmd: |
+      ARCH=$(dpkg --print-architecture)
+      VERSION=$(curl -s https://api.github.com/repos/dbeaver/dbeaver/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4)
+      curl -fsSL "https://github.com/dbeaver/dbeaver/releases/download/${VERSION}/dbeaver-ce_${VERSION}_${ARCH}.deb" \
+        -o /tmp/dbeaver.deb
+      dpkg -i /tmp/dbeaver.deb || apt-get install -f -y
+      rm -f /tmp/dbeaver.deb
+    executable: /bin/bash
+  when: dbeaver_check.rc != 0
+  ignore_errors: true

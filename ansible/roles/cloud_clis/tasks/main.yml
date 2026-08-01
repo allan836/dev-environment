@@ -1,0 +1,87 @@
+---
+# Role: cloud_clis
+# Installs AWS CLI v2, Azure CLI, and Google Cloud CLI.
+# All are optional (ignore_errors: true) — not all teams use all three.
+
+# ---- AWS CLI v2 ------------------------------------------------------------
+
+- name: Check if AWS CLI is installed
+  ansible.builtin.command: which aws
+  register: aws_check
+  changed_when: false
+  failed_when: false
+
+- name: Install AWS CLI v2
+  ansible.builtin.shell:
+    cmd: |
+      ARCH=$(uname -m)
+      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip
+      unzip -q /tmp/awscliv2.zip -d /tmp/awscliv2
+      /tmp/awscliv2/aws/install
+      rm -rf /tmp/awscliv2 /tmp/awscliv2.zip
+    executable: /bin/bash
+  when: aws_check.rc != 0
+  ignore_errors: true
+
+- name: Verify AWS CLI
+  ansible.builtin.command: aws --version
+  register: aws_version
+  changed_when: false
+  ignore_errors: true
+
+- name: Print AWS CLI version
+  ansible.builtin.debug:
+    msg: "{{ aws_version.stdout | default('AWS CLI not installed') }}"
+
+# ---- Azure CLI -------------------------------------------------------------
+
+- name: Install Azure CLI GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+    creates: /etc/apt/keyrings/microsoft.gpg
+  ignore_errors: true
+
+- name: Add Azure CLI apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] \
+        https://packages.microsoft.com/repos/azure-cli/ \
+        $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/azure-cli.list
+    creates: /etc/apt/sources.list.d/azure-cli.list
+  ignore_errors: true
+
+- name: Install Azure CLI
+  ansible.builtin.apt:
+    name: azure-cli
+    update_cache: true
+    state: present
+  ignore_errors: true
+
+# ---- Google Cloud CLI -------------------------------------------------------
+
+- name: Install Google Cloud CLI GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+    creates: /usr/share/keyrings/cloud.google.gpg
+  ignore_errors: true
+
+- name: Add Google Cloud apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
+        https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list
+    creates: /etc/apt/sources.list.d/google-cloud-sdk.list
+  ignore_errors: true
+
+- name: Install Google Cloud CLI
+  ansible.builtin.apt:
+    name: google-cloud-cli
+    update_cache: true
+    state: present
+  ignore_errors: true

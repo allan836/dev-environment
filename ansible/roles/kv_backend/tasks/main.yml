@@ -1,0 +1,116 @@
+---
+# Role: kv_backend
+# Sets up the kv-backend local development environment:
+#   1. Clones the kv-backend repository (requires SSH key to be in GitHub first).
+#   2. Loads pre-built Docker images from the asset tarball.
+#   3. Runs the workstation-bootstrap setup (installs remaining dependencies).
+#
+# This role runs AFTER docker, java, node, and python roles.
+# It is intentionally last in the playbook because it requires all runtimes.
+
+- name: Ensure kv-backend workspace directory exists
+  ansible.builtin.file:
+    path: "{{ dev_home }}/workspace/repos"
+    state: directory
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+    mode: "0755"
+  become: true
+
+# ---- Clone kv-backend repo -------------------------------------------------
+# This will fail silently if the SSH key has not been added to GitHub yet.
+# provision.sh handles the SSH key prompt BEFORE Ansible runs, so by the time
+# this task executes the key should already be in GitHub.
+
+- name: Clone kv-backend repository
+  ansible.builtin.git:
+    repo: "git@github.com:knowledgevault/kv-backend.git"
+    dest: "{{ dev_home }}/workspace/repos/kv-backend"
+    version: main
+    accept_hostkey: true
+    update: false
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+    GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=accept-new"
+  ignore_errors: true
+  register: kv_clone
+
+- name: Warn if kv-backend clone failed
+  ansible.builtin.debug:
+    msg: |
+      WARNING: kv-backend could not be cloned.
+      This usually means the SSH key has not been added to GitHub.
+      To fix after provisioning:
+        vagrant ssh
+        cat ~/.ssh/id_ed25519.pub   # add this to GitHub SSH keys
+        git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend
+  when: kv_clone is failed or kv_clone.changed == false and kv_clone.failed is defined
+
+# ---- Link the dev-environment repo into the expected workspace path --------
+
+- name: Create symlink for dev-environment repo in workspace
+  ansible.builtin.file:
+    src: "{{ dev_home }}/dev-environment"
+    dest: "{{ dev_home }}/workspace/repos/dev-environment"
+    state: link
+    force: true
+  become: false
+  become_user: "{{ dev_user }}"
+  ignore_errors: true
+
+# ---- Load pre-built Docker images from asset tarball -----------------------
+
+- name: Check if preload Docker images tarball exists
+  ansible.builtin.stat:
+    path: "{{ dev_home }}/dev-environment/assets/preload_kv.tar.gz"
+  register: preload_tarball
+
+- name: Load preload Docker images into Docker daemon
+  ansible.builtin.shell:
+    cmd: docker load -i {{ dev_home }}/dev-environment/assets/preload_kv.tar.gz
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  when: preload_tarball.stat.exists
+  ignore_errors: true
+  register: docker_load_result
+
+- name: Print Docker load result
+  ansible.builtin.debug:
+    msg: "{{ docker_load_result.stdout_lines | default(['Skipped — tarball not found']) }}"
+
+# ---- workstation-bootstrap .env setup -------------------------------------
+
+- name: Copy .env.example to .env if not present
+  ansible.builtin.copy:
+    src: "{{ dev_home }}/dev-environment/workstation-bootstrap/.env.example"
+    dest: "{{ dev_home }}/dev-environment/workstation-bootstrap/.env"
+    remote_src: true
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+    force: false
+  ignore_errors: true
+
+- name: Set KV_BACKEND_DIR in .env
+  ansible.builtin.lineinfile:
+    path: "{{ dev_home }}/dev-environment/workstation-bootstrap/.env"
+    regexp: "^KV_BACKEND_DIR="
+    line: "KV_BACKEND_DIR={{ dev_home }}/workspace/repos/kv-backend"
+    create: false
+  ignore_errors: true
+
+# ---- Summary ---------------------------------------------------------------
+
+- name: Print kv-backend setup summary
+  ansible.builtin.debug:
+    msg:
+      - "kv-backend role complete."
+      - "Next steps inside the VM (vagrant ssh):"
+      - "  cd ~/dev-environment/workstation-bootstrap"
+      - "  make kv-up      # start MySQL, Cassandra, Solr, RabbitMQ, Memcached, Tomcat"
+      - "  make kv-init    # first-time DB init (run once)"
+      - "  make kv-verify  # check all services are reachable"

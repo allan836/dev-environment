@@ -1,0 +1,63 @@
+---
+# Role: terraform
+# Installs Terraform via HashiCorp's official apt repository.
+# Also installs OpenTofu (open-source Terraform fork) as an alternative.
+
+- name: Install HashiCorp GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://apt.releases.hashicorp.com/gpg \
+        | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+- name: Add HashiCorp apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+        https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/hashicorp.list
+    creates: /etc/apt/sources.list.d/hashicorp.list
+
+- name: Update apt cache after adding HashiCorp repo
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Install Terraform
+  ansible.builtin.apt:
+    name: terraform
+    state: present
+
+- name: Verify Terraform installation
+  ansible.builtin.command: terraform version
+  register: tf_version
+  changed_when: false
+
+- name: Print Terraform version
+  ansible.builtin.debug:
+    msg: "{{ tf_version.stdout_lines[0] }}"
+
+# ---- OpenTofu (optional, open-source Terraform alternative) ---------------
+
+- name: Install OpenTofu GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://packages.opentofu.org/opentofu/tofu/gpgkey \
+        | gpg --dearmor -o /usr/share/keyrings/opentofu-archive-keyring.gpg
+    creates: /usr/share/keyrings/opentofu-archive-keyring.gpg
+  ignore_errors: true
+
+- name: Add OpenTofu apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo "deb [signed-by=/usr/share/keyrings/opentofu-archive-keyring.gpg] \
+        https://packages.opentofu.org/opentofu/tofu/any/ any main" \
+        > /etc/apt/sources.list.d/opentofu.list
+    creates: /etc/apt/sources.list.d/opentofu.list
+  ignore_errors: true
+
+- name: Install OpenTofu
+  ansible.builtin.apt:
+    name: tofu
+    update_cache: true
+    state: present
+  ignore_errors: true

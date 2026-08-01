@@ -89,35 +89,59 @@ dev-environment/
 - **Not currently supported:** macOS, Windows, other Linux distributions.
   Contributions to extend support are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-## Quick Start
+## Quick Start — Single Command
 
-> Root-level automation (`bootstrap/`, `ansible/`, `docker/compose/`) is not
-> yet implemented. See [ROADMAP.md](./ROADMAP.md) for status.
+Prerequisites on the host laptop: **git** and **internet access**.
+Everything else (Vagrant, the hypervisor, Ubuntu, all developer tools)
+is installed automatically.
 
-**For kv-backend specifically**, use [workstation-bootstrap/](./workstation-bootstrap/)
-instead — it is the real, working single-command path today:
+```bash
+git clone https://github.com/allandzingo/dev-environment.git
+cd dev-environment
+./provision.sh
+```
+
+`provision.sh` will:
+1. Install **Vagrant** on the host.
+2. Try hypervisor backends in order (**VirtualBox → KVM → VMware**) until
+   one works — if one fails it destroys the partial VM and tries the next.
+3. Boot an **Ubuntu 24.04 LTS** VM (cloud image, no ISO needed).
+4. Run **cloud-init** on first boot and then an **Ansible playbook** that
+   installs every developer tool inside the VM.
+5. Pause once to show the VM's SSH public key — add it to your GitHub
+   account (Settings → SSH keys). This is the only manual step.
+6. Clone **kv-backend**, load Docker images, start all services.
+7. Print `✔ Developer workstation ready.`
+
+Options:
+
+```bash
+./provision.sh --cpu 6 --ram 12288   # more resources
+./provision.sh --destroy             # wipe VM and reprovision from scratch
+./provision.sh --skip-ansible        # boot VM only, skip tool install
+./provision.sh --help                # full usage
+```
+
+SSH into the running VM at any time:
+
+```bash
+cd vm && vagrant ssh
+```
+
+See [ROADMAP.md](./ROADMAP.md) for what was built and what is planned next.
+
+---
+
+**Existing workstation (no VM needed):** if you are already on Ubuntu or
+macOS, use [workstation-bootstrap/](./workstation-bootstrap/) directly:
 
 ```bash
 cd workstation-bootstrap
-./setup.sh      # host tools: git, docker, java 17, maven, node...
-make kv-up      # builds kv-backend + starts its own docker-compose stack
-make kv-init    # first time only: DB/Cassandra/Solr init
-make kv-verify  # checks kv-backend services are reachable
+./setup.sh      # installs git, docker, java 17, maven, node on the host
+make kv-up      # starts the kv-backend docker-compose stack
+make kv-init    # first-time DB/Cassandra/Solr init
+make kv-verify  # checks all services are reachable
 ```
-
-See [workstation-bootstrap/README.md#kv-backend-local-environment](./workstation-bootstrap/README.md#kv-backend-local-environment)
-for prerequisites (kv-backend's preload Docker images must be downloaded
-manually first) and full details.
-
-For the general Fedora-only workstation described below:
-
-1. Install Fedora Workstation on the target machine.
-2. Read [docs/setup/fedora-base-setup.md](./docs/setup/fedora-base-setup.md).
-3. Clone this repository.
-4. Follow [docs/runbooks/new-machine-bootstrap.md](./docs/runbooks/new-machine-bootstrap.md)
-   for the end-to-end rebuild procedure.
-5. Once automation lands, run the bootstrap entry point described in
-   [bootstrap/README.md](./bootstrap/README.md).
 
 ## Documentation Index
 

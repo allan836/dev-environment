@@ -1,0 +1,102 @@
+---
+# Role: python
+# Installs pyenv (Python version manager), pipenv, and uv.
+# Mirrors install-runtimes.sh Python block.
+
+- name: Install pyenv build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - libssl-dev
+      - zlib1g-dev
+      - libbz2-dev
+      - libreadline-dev
+      - libsqlite3-dev
+      - libncursesw5-dev
+      - xz-utils
+      - tk-dev
+      - libxml2-dev
+      - libxmlsec1-dev
+      - libffi-dev
+      - liblzma-dev
+    state: present
+
+- name: Check if pyenv is installed
+  ansible.builtin.stat:
+    path: "{{ dev_home }}/.pyenv/bin/pyenv"
+  register: pyenv_bin
+  become: false
+  become_user: "{{ dev_user }}"
+
+- name: Install pyenv
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://pyenv.run | bash
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  when: not pyenv_bin.stat.exists
+
+- name: Add pyenv to .bashrc
+  ansible.builtin.blockinfile:
+    path: "{{ dev_home }}/.bashrc"
+    marker: "# {mark} ANSIBLE MANAGED — pyenv"
+    block: |
+      export PYENV_ROOT="$HOME/.pyenv"
+      command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+    create: true
+    owner: "{{ dev_user }}"
+    group: "{{ dev_user }}"
+  become: false
+  become_user: "{{ dev_user }}"
+
+- name: Install Python 3.12 via pyenv
+  ansible.builtin.shell:
+    cmd: |
+      export PYENV_ROOT="{{ dev_home }}/.pyenv"
+      export PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+      pyenv install -s 3.12.0
+      pyenv global 3.12.0
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Install pipenv and uv via pip
+  ansible.builtin.shell:
+    cmd: |
+      export PYENV_ROOT="{{ dev_home }}/.pyenv"
+      export PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+      pip3 install --user "pipenv>=2026.0.2" || pip3 install --user pipenv
+      if ! command -v uv >/dev/null 2>&1; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      fi
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+
+- name: Verify Python installation
+  ansible.builtin.shell:
+    cmd: |
+      export PYENV_ROOT="{{ dev_home }}/.pyenv"
+      export PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+      python3 --version
+    executable: /bin/bash
+  become: false
+  become_user: "{{ dev_user }}"
+  environment:
+    HOME: "{{ dev_home }}"
+  register: python_version
+  changed_when: false
+
+- name: Print Python version
+  ansible.builtin.debug:
+    msg: "{{ python_version.stdout }}"

@@ -1,0 +1,77 @@
+---
+# =============================================================================
+# Developer Environment — Ansible Playbook
+#
+# Installs all developer tools inside the Ubuntu VM.
+# Run order matters: docker must come before kv-backend (needs compose).
+#
+# Usage (from inside the VM, via provision.sh / Vagrant):
+#   ansible-playbook playbook.yml -i inventory/hosts.yml \
+#     --extra-vars "dev_user=vagrant"
+#
+# To run only specific tools:
+#   ansible-playbook playbook.yml -i inventory/hosts.yml --tags docker,java
+# =============================================================================
+- name: Developer Workstation — Full Provision
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    dev_user: "{{ dev_user | default('vagrant') }}"
+    dev_home: "/home/{{ dev_user }}"
+
+  pre_tasks:
+    - name: Ensure apt cache is fresh
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure workspace directory exists
+      ansible.builtin.file:
+        path: "{{ dev_home }}/workspace/repos"
+        state: directory
+        owner: "{{ dev_user }}"
+        group: "{{ dev_user }}"
+        mode: "0755"
+
+  roles:
+    - role: docker
+      tags: [docker]
+
+    - role: java
+      tags: [java, runtimes]
+
+    - role: node
+      tags: [node, runtimes]
+
+    - role: python
+      tags: [python, runtimes]
+
+    - role: terraform
+      tags: [terraform, iac]
+
+    - role: kubectl
+      tags: [kubectl, kubernetes, k8s]
+
+    - role: cloud_clis
+      tags: [cloud, aws, azure, gcp]
+
+    - role: developer_tools
+      tags: [tools, git, vscode]
+
+    - role: kv_backend
+      tags: [kv, kv-backend]
+
+  post_tasks:
+    - name: Run verification
+      ansible.builtin.command: "{{ dev_home }}/workspace/repos/dev-environment/workstation-bootstrap/scripts/verify.sh"
+      become: false
+      become_user: "{{ dev_user }}"
+      ignore_errors: true
+      register: verify_result
+
+    - name: Print verification output
+      ansible.builtin.debug:
+        msg: "{{ verify_result.stdout_lines }}"
+      when: verify_result.stdout_lines is defined

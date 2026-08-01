@@ -1,0 +1,72 @@
+---
+# Role: kubectl
+# Installs kubectl (Kubernetes CLI) via the official Kubernetes apt repo.
+# Also installs k9s (terminal UI for Kubernetes) and Helm.
+
+- name: Install Kubernetes GPG key
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Add Kubernetes apt repository
+  ansible.builtin.shell:
+    cmd: |
+      echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+        https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' \
+        > /etc/apt/sources.list.d/kubernetes.list
+    creates: /etc/apt/sources.list.d/kubernetes.list
+
+- name: Install kubectl
+  ansible.builtin.apt:
+    name: kubectl
+    update_cache: true
+    state: present
+
+- name: Verify kubectl
+  ansible.builtin.command: kubectl version --client
+  register: kubectl_version
+  changed_when: false
+  ignore_errors: true
+
+- name: Print kubectl version
+  ansible.builtin.debug:
+    msg: "{{ kubectl_version.stdout }}"
+
+# ---- k9s -------------------------------------------------------------------
+
+- name: Check if k9s is installed
+  ansible.builtin.command: which k9s
+  register: k9s_check
+  changed_when: false
+  failed_when: false
+
+- name: Install k9s (Kubernetes TUI)
+  ansible.builtin.shell:
+    cmd: |
+      ARCH=$(dpkg --print-architecture)
+      VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4)
+      curl -fsSL "https://github.com/derailed/k9s/releases/download/${VERSION}/k9s_linux_${ARCH}.deb" \
+        -o /tmp/k9s.deb
+      dpkg -i /tmp/k9s.deb
+      rm -f /tmp/k9s.deb
+    executable: /bin/bash
+  when: k9s_check.rc != 0
+  ignore_errors: true
+
+# ---- Helm ------------------------------------------------------------------
+
+- name: Check if Helm is installed
+  ansible.builtin.command: which helm
+  register: helm_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Helm
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    executable: /bin/bash
+  when: helm_check.rc != 0
+  ignore_errors: true
