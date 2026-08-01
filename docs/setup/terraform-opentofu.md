@@ -1,64 +1,55 @@
-# Terraform and OpenTofu Setup
+# Terraform and OpenTofu
 
 ## Purpose
 
-Install both Terraform and OpenTofu CLIs so infrastructure-as-code projects
-can be authored and applied regardless of which tool a given project
-standardizes on.
+Reference guide for IaC CLIs installed inside the developer VM.
 
 ## Scope
 
-Covers CLI installation only. Does not cover any specific IaC project or
-state backend configuration, which is out of scope for this workstation
-repository. Does not cover Kubernetes itself — see
-[docs/setup/kubernetes.md](./kubernetes.md).
+Covers Terraform and OpenTofu CLI installation. Does not cover specific IaC
+projects or state backend configuration, which are project-specific.
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
-## Manual Installation Steps
+## Automation Status
 
-1. Install Terraform via the HashiCorp repository:
-   ```bash
-   sudo dnf install -y dnf-plugins-core
-   sudo dnf config-manager --add-repo https://rpm.releases.hashicorp.com/fedora/hashicorp.repo
-   sudo dnf install -y terraform
-   ```
-2. Install OpenTofu via its official install script or RPM release:
-   ```bash
-   curl -fsSL https://get.opentofu.org/install-opentofu.sh -o install-opentofu.sh
-   chmod +x install-opentofu.sh
-   ./install-opentofu.sh --install-method rpm
-   rm install-opentofu.sh
-   ```
+**Fully automated** by the Ansible `terraform` role.
+Source: [`ansible/roles/terraform/tasks/main.yml`](../../ansible/roles/terraform/tasks/main.yml).
 
-## Configuration
-
-- No global configuration is required for either CLI on this workstation.
-- Provider credentials (AWS/Azure/GCP) are covered in
-  [docs/setup/cloud-clis.md](./cloud-clis.md) and
-  [docs/security/secrets-management.md](../security/secrets-management.md).
+Both Terraform and OpenTofu are installed via their official apt repositories.
+OpenTofu install has `ignore_errors: true` — it does not block provisioning
+if the repo is temporarily unavailable.
 
 ## Verification
 
 ```bash
-terraform -version
-tofu -version
+terraform version
+tofu version    # OpenTofu
 ```
 
-## Automation Status
+## Manual Install (fallback only)
 
-Not yet automated. Planned as an Ansible role installing both binaries side
-by side — see [ROADMAP.md](../../ROADMAP.md).
+```bash
+# Terraform
+curl -fsSL https://apt.releases.hashicorp.com/gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+  https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt-get update && sudo apt-get install -y terraform
+
+# OpenTofu
+curl -fsSL https://get.opentofu.org/install-opentofu.sh | sudo sh -s -- --install-method deb
+```
 
 ## References
 
-- [Terraform install docs](https://developer.hashicorp.com/terraform/install)
-- [OpenTofu install docs](https://opentofu.org/docs/intro/install/)
+- [Terraform documentation](https://developer.hashicorp.com/terraform/docs)
+- [OpenTofu documentation](https://opentofu.org/docs/)
 
 ## Related Documents
 
-- [docs/setup/kubernetes.md](./kubernetes.md)
-- [docs/setup/cloud-clis.md](./cloud-clis.md)
-- [docs/security/secrets-management.md](../security/secrets-management.md)
+- [ansible/roles/terraform](../../ansible/roles/terraform/tasks/main.yml)

@@ -2,67 +2,74 @@
 
 ## Purpose
 
-Install and configure Docker Engine and Docker Compose as the primary
-container runtime for local services on this workstation.
+Reference guide for Docker Engine and Docker Compose inside the developer VM.
 
 ## Scope
 
-Covers Docker Engine, Docker Compose plugin, and rootless-vs-root usage
-considerations. Does not cover Podman (the optional alternative) — see
-[docs/setup/podman.md](./podman.md). Does not cover individual service
-Compose stacks — see [docs/setup/databases-services.md](./databases-services.md).
+Covers Docker Engine, Docker Compose plugin, and the developer user group
+setup. Does not cover individual service Compose stacks — see
+[databases-services.md](./databases-services.md).
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
-## Manual Installation Steps
+## Automation Status
 
-1. Remove any conflicting packages (`podman-docker`, `moby-engine` if
-   present from a previous setup).
-2. Add the Docker CE repository and install:
-   ```bash
-   sudo dnf-3 config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-   sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-   ```
-3. Enable and start the daemon:
-   ```bash
-   sudo systemctl enable --now docker
-   ```
-4. Allow the current user to run Docker without `sudo`:
-   ```bash
-   sudo usermod -aG docker $USER
-   ```
-   Log out and back in for the group change to take effect.
+**Fully automated** by the Ansible `docker` role.
+Source: [`ansible/roles/docker/tasks/main.yml`](../../ansible/roles/docker/tasks/main.yml).
 
-## Configuration
+Provisioning installs Docker Engine via the official Docker apt repository
+and adds the developer user to the `docker` group automatically.
 
-- Default Docker network and storage-driver settings are left at defaults
-  unless a specific service guide requires an override.
-- Port allocation for containers follows [docs/architecture/networking.md](../architecture/networking.md).
+## Manual Steps (fallback only)
+
+If the Ansible role failed or you are setting up without `provision.sh`:
+
+```bash
+# Add Docker GPG key
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Add Docker apt repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+
+# Install
+sudo apt-get update
+sudo apt-get install -y \
+  docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+
+# Enable and add user to group
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Log out and back in (or `newgrp docker`) for group membership to take effect.
 
 ## Verification
 
 ```bash
 docker version
-docker run --rm hello-world
 docker compose version
+docker run --rm hello-world
 ```
-Confirms the daemon is running, containers can execute, and Compose is
-available.
-
-## Automation Status
-
-Not yet automated. Planned as an Ansible role; Compose stacks will live under
-[docker/compose](../../docker/compose). See [docs/automation/docker-compose.md](../automation/docker-compose.md).
 
 ## References
 
-- [Docker Engine install guide (Fedora)](https://docs.docker.com/engine/install/fedora/)
+- [Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
 
 ## Related Documents
 
-- [docs/setup/podman.md](./podman.md)
-- [docs/architecture/networking.md](../architecture/networking.md)
-- [docs/automation/docker-compose.md](../automation/docker-compose.md)
-- [docs/setup/databases-services.md](./databases-services.md)
+- [ansible/roles/docker/tasks/main.yml](../../ansible/roles/docker/tasks/main.yml)
+- [databases-services.md](./databases-services.md)
+- [docs/troubleshooting/docker.md](../troubleshooting/docker.md)

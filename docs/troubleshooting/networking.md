@@ -20,7 +20,7 @@ which is project-specific and out of scope for this repository.
 
 - **Symptom:** `Error starting userland proxy: listen tcp 127.0.0.1:5432:
   bind: address already in use`.
-- **Cause:** Another process (often a `dnf`-installed native service, or a
+- **Cause:** Another process (often a natively installed service or a
   different Compose stack) is already bound to the same port.
 - **Resolution:** Identify the owner with `sudo ss -ltnp | grep <port>`;
   stop the conflicting service or remap the port, following the port table

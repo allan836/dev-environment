@@ -1,98 +1,105 @@
-# Containerized Databases & Services
+# kv-backend Services
 
 ## Purpose
 
-Document the containerized local services available on this workstation:
-data stores, messaging, and the local AI stack. Serve as the authoritative
-reference for default ports, credentials handling, and persistence per
-service.
+Reference guide for the containerized services that make up the kv-backend
+local development environment.
 
 ## Scope
 
-Covers PostgreSQL, MySQL, MongoDB, Cassandra, Redis, RabbitMQ, Neo4j,
-Qdrant, Ollama, and Open WebUI as Docker/Podman Compose services. Does not
-cover the container runtime itself — see [docs/setup/docker.md](./docker.md)
-and [docs/setup/podman.md](./podman.md). Does not cover backup procedures —
-see [docs/runbooks/backup-restore.md](../runbooks/backup-restore.md).
+Covers the seven Docker Compose services started by `make kv-up`. Does not
+cover the container runtime itself — see [docker.md](./docker.md). Does not
+cover backup procedures — see
+[docs/runbooks/backup-restore.md](../runbooks/backup-restore.md).
 
 ## Prerequisites
 
-- [docs/setup/docker.md](./docker.md) (or [podman.md](./podman.md)) completed.
-- [docs/architecture/networking.md](../architecture/networking.md) and
-  [docs/architecture/storage.md](../architecture/storage.md) read for the
-  design rationale behind ports and volumes.
+- Developer VM is running and provisioned (`./provision.sh` completed).
+- SSH into the VM: `cd vm && vagrant ssh`.
+- kv-backend is cloned at `~/workspace/repos/kv-backend`.
 
 ## Service Reference
 
-| Service | Purpose | Default Port | Persistent Volume |
-|---|---|---|---|
-| PostgreSQL | Primary relational database | 5432 | Yes |
-| MySQL | Relational database (MySQL-compatible workloads) | 3306 | Yes |
-| MongoDB | Document database | 27017 | Yes |
-| Cassandra | Wide-column distributed database | 9042 | Yes |
-| Redis | In-memory cache / data structure store | 6379 | Optional (cache by default, see [docs/architecture/storage.md](../architecture/storage.md)) |
-| RabbitMQ | Message broker | 5672 (AMQP), 15672 (mgmt UI) | Yes |
-| Neo4j | Graph database | 7474 (HTTP), 7687 (Bolt) | Yes |
-| Qdrant | Vector database | 6333 (HTTP), 6334 (gRPC) | Yes |
-| Ollama | Local LLM runtime | 11434 | Yes (model storage) |
-| Open WebUI | Web UI for Ollama-backed chat | 8080 | Yes (app state) |
+All services are started together with `make kv-up` from
+`~/dev-environment/workstation-bootstrap/`. They are part of kv-backend's
+own `preload-docker-compose` stack.
 
-All ports above are workstation defaults, bound to `127.0.0.1` unless a
-guide-specific reason requires wider exposure, per
-[docs/architecture/networking.md](../architecture/networking.md).
+| Service | Port | Purpose |
+|---|---|---|
+| MySQL | 43306 | kv-backend relational database |
+| RabbitMQ | 35672 (AMQP), 45672 (management UI) | Message broker |
+| Cassandra | 59042 | Time-series / wide-column data |
+| Solr | 58983 | Full-text search |
+| Memcached | 41211 | Cache / session store |
+| MailHog | 1025 (SMTP), 8025 (web UI) | Local mail catcher — captures outbound email |
+| Tomcat / portal | 8080 | kv-backend portal application |
 
-## Manual Startup (Pattern)
+> Ports are non-standard (prefixed with 4x/5x) to avoid conflicts with
+> any natively running services on the host.
 
-Each service will have a Compose file under [docker/compose](../../docker/compose)
-(e.g. `docker/compose/postgres.yml`). The general pattern, once implemented:
+## Starting and managing services
 
 ```bash
-docker compose -f docker/compose/<service>.yml up -d
+cd ~/dev-environment/workstation-bootstrap
+
+make kv-up          # start all services (loads preload images on first run)
+make kv-init        # FIRST TIME ONLY — initialises MySQL schema + Cassandra keyspaces
+make kv-verify      # check all service ports are reachable
+make kv-status      # docker compose ps
+make kv-logs        # follow logs for all services
+make kv-down        # stop all services (data volumes preserved)
+make kv-clean-slate # wipe all volumes and rebuild from zero
 ```
 
-Until Compose files are implemented (see [ROADMAP.md](../../ROADMAP.md)),
-services may be started manually with `docker run`, referencing the port and
-volume conventions in the table above.
+## Preload Docker images
+
+kv-backend's services use pre-built images (`kv_rabbitmq:preload_v1`,
+`kv_cassandra:preload_v1`, `kv_portal:preload_v1`). These are loaded from
+the tarball at `assets/preload_kv.tar.gz` (~754 MB).
+
+`make kv-up` runs `docker load` automatically on first run. Subsequent runs
+skip this since the images are already in Docker's image store.
 
 ## Configuration
 
-- Credentials (database passwords, RabbitMQ users) are supplied via
-  environment variables sourced from an untracked `.env` file — never
-  committed. See [docs/security/secrets-management.md](../security/secrets-management.md).
-- The AI stack (Ollama, Open WebUI, Qdrant) is typically run together as one
-  Compose project since Open WebUI depends on both.
+Credentials and paths are in `workstation-bootstrap/.env` (created from
+`.env.example` on first run by `setup.sh`). Key variables:
+
+```bash
+KV_BACKEND_DIR=~/workspace/repos/kv-backend
+KV_PRELOAD_TAR=../assets/preload_kv.tar.gz
+```
 
 ## Verification
 
-- **PostgreSQL:** `pg_isready -h 127.0.0.1 -p 5432`
-- **MySQL:** `mysqladmin ping -h 127.0.0.1 -P 3306`
-- **MongoDB:** `mongosh --eval "db.adminCommand('ping')"`
-- **Cassandra:** `cqlsh 127.0.0.1 9042 -e "describe cluster"`
-- **Redis:** `redis-cli -h 127.0.0.1 ping`
-- **RabbitMQ:** management UI at `http://127.0.0.1:15672`
-- **Neo4j:** browser at `http://127.0.0.1:7474`
-- **Qdrant:** `curl http://127.0.0.1:6333/readyz`
-- **Ollama:** `curl http://127.0.0.1:11434/api/tags`
-- **Open WebUI:** browser at `http://127.0.0.1:8080`
+```bash
+make kv-verify
+```
 
-## Automation Status
+Checks that every service port is accepting connections and prints a health
+summary.
 
-Not yet automated. Compose files for each service are planned in
-[docker/compose](../../docker/compose) — see
-[docs/automation/docker-compose.md](../automation/docker-compose.md) and
-[ROADMAP.md](../../ROADMAP.md) Phase 3.
+## Clean slate (broken or unknown state)
+
+```bash
+make kv-clean-slate
+# Destroys all volumes, removes containers, reruns kv-up + kv-init
+```
+
+To seed from Uniserver instead of local init (requires Uniserver
+credentials in `.env`):
+
+```bash
+make kv-clean-slate-remote
+```
 
 ## References
 
-- [Docker Hub official images](https://hub.docker.com/search?q=&image_filter=official)
-- [Ollama documentation](https://github.com/ollama/ollama)
-- [Open WebUI documentation](https://docs.openwebui.com/)
-- [Qdrant documentation](https://qdrant.tech/documentation/)
+- [workstation-bootstrap/Makefile](../../workstation-bootstrap/Makefile)
+- [workstation-bootstrap/scripts/kv-backend.sh](../../workstation-bootstrap/scripts/kv-backend.sh)
 
 ## Related Documents
 
-- [docs/architecture/networking.md](../architecture/networking.md)
-- [docs/architecture/storage.md](../architecture/storage.md)
-- [docs/automation/docker-compose.md](../automation/docker-compose.md)
+- [docs/runbooks/service-lifecycle.md](../runbooks/service-lifecycle.md)
 - [docs/runbooks/backup-restore.md](../runbooks/backup-restore.md)
-- [docs/security/secrets-management.md](../security/secrets-management.md)
+- [docs/troubleshooting/docker.md](../troubleshooting/docker.md)

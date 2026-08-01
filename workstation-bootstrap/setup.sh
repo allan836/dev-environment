@@ -76,6 +76,6 @@ run:
   make kv-init    # first time only: kv-backend's own DB/Cassandra/Solr init
   make kv-verify  # check services are reachable
 
-See docs/classification.md and docs/architecture.md for the full rationale,
+See docs/architecture.md for the full rationale,
 and README.md#kv-backend-local-environment for kv-backend specifics.
 EOF

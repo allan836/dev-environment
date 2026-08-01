@@ -2,67 +2,72 @@
 
 ## Purpose
 
-Install the primary development environments used on this workstation:
-Visual Studio Code and JetBrains IDEs (via JetBrains Toolbox).
+Reference guide for development environments installed inside the developer VM.
 
 ## Scope
 
-Covers installation only. Does not cover editor extension lists or IDE
-settings sync configuration in detail — a summary pointer is given below,
-full settings live under [configs](../../configs/README.md) once captured.
+Covers VS Code (installed automatically) and JetBrains IDEs (manual install
+after provisioning).
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
-## Manual Installation Steps
+## VS Code
 
-### Visual Studio Code
+### Automation Status
 
-```bash
-sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-sudo dnf config-manager --add-repo https://packages.microsoft.com/yumrepos/vscode
-sudo dnf install -y code
-```
+**Fully automated** by the Ansible `developer_tools` role.
+Source: [`ansible/roles/developer_tools/tasks/main.yml`](../../ansible/roles/developer_tools/tasks/main.yml).
 
-### JetBrains IDEs
+VS Code is installed inside the VM via the Microsoft apt repository. Because
+the VM is headless, the recommended way to use VS Code is via the **Remote
+SSH extension** on your host laptop:
 
-Install via JetBrains Toolbox (recommended, manages updates for all
-JetBrains products):
-```bash
-# Download the latest Toolbox App tarball from JetBrains and extract to
-# a local applications directory, then run the installer binary once.
-```
-Individual IDEs (IntelliJ IDEA, PyCharm, GoLand, etc.) are then installed
-and updated through Toolbox rather than `dnf`.
+1. Install the "Remote - SSH" extension in VS Code on your laptop.
+2. Connect to the VM: `ssh vagrant@192.168.56.10` (the VM's private network IP).
+3. Open any folder inside the VM — all editing, terminals, and extensions
+   run inside the VM.
 
-## Configuration
-
-- VS Code extensions and settings, once standardized, are tracked as a
-  managed configuration under [configs](../../configs/README.md).
-- JetBrains IDE settings sync uses the built-in "Settings Sync" feature
-  backed by a JetBrains account or GitHub Gist.
-
-## Verification
+### Verify
 
 ```bash
 code --version
 ```
-For JetBrains IDEs, confirm launch and license/account status manually
-through the Toolbox App.
 
-## Automation Status
+### Manual Install (fallback only)
 
-Not yet automated. Planned as an Ansible role for VS Code (package + `code
---install-extension` list); JetBrains Toolbox installation is likely to
-remain a documented manual step due to its self-updating nature.
+```bash
+curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/microsoft-vscode.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft-vscode.gpg] \
+  https://packages.microsoft.com/repos/code stable main" \
+  | sudo tee /etc/apt/sources.list.d/vscode.list
+sudo apt-get update && sudo apt-get install -y code
+```
+
+## JetBrains IDEs
+
+JetBrains Toolbox is not automated. Install it manually inside the VM after
+provisioning if needed:
+
+```bash
+# Download JetBrains Toolbox
+curl -fsSL "https://www.jetbrains.com/toolbox-app/" \
+  # Download the .tar.gz for Linux from the JetBrains website
+  # Extract and run the jetbrains-toolbox binary
+```
+
+For a headless VM, IntelliJ IDEA and other JetBrains IDEs also support
+**Remote Development via SSH** — connect from the IDE on your host laptop
+to the VM without a GUI inside the VM.
 
 ## References
 
-- [VS Code Linux install docs](https://code.visualstudio.com/docs/setup/linux)
-- [JetBrains Toolbox App](https://www.jetbrains.com/toolbox-app/)
+- [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)
+- [JetBrains Remote Development](https://www.jetbrains.com/remote-development/)
 
 ## Related Documents
 
-- [docs/setup/languages-runtimes.md](./languages-runtimes.md)
-- [configs/README.md](../../configs/README.md)
+- [ansible/roles/developer_tools](../../ansible/roles/developer_tools/tasks/main.yml)

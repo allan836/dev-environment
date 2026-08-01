@@ -1,25 +1,24 @@
-# Dev Environment — Fedora Developer Workstation
+# Dev Environment — Developer Environment Provisioner
 
 ## Project Vision
 
 A single source of truth for building, documenting, and rebuilding a modern
-cloud/platform engineering workstation on Fedora Linux. This repository
-treats a developer machine as infrastructure: version-controlled, declarative,
-reproducible, and disaster-recovery ready. If a laptop dies, a new Fedora
-install combined with this repository should be enough to be productive again
-within hours, not days.
+cloud/platform engineering developer environment. This repository treats a
+developer machine as infrastructure: version-controlled, declarative,
+reproducible, and disaster-recovery ready. One command provisions a complete
+Ubuntu VM from scratch on any host OS. If a machine is lost, running
+`./provision.sh` on any laptop restores a working environment in minutes.
 
 ## Goals
 
-- Provide a documented, repeatable process to configure a Fedora Workstation
-  for cloud/platform engineering and software development.
-- Automate installation and configuration wherever safely possible.
-- Preserve institutional knowledge (decisions, troubleshooting, runbooks) that
-  normally lives only in one engineer's head.
-- Support container-based local services (databases, message brokers, AI
-  tooling) with minimal host pollution.
-- Enable disaster recovery: rebuild a workstation from bare metal using only
-  this repository and a few secrets.
+- Provide a single-command setup that works on any developer laptop
+  (macOS, Ubuntu, Debian, Fedora) — no manual OS installation required.
+- Automate all tool installation inside an isolated, reproducible Ubuntu VM.
+- Preserve institutional knowledge (decisions, troubleshooting, runbooks)
+  that normally lives only in one engineer's head.
+- Support kv-backend's containerized local services with minimal friction.
+- Enable disaster recovery: rebuild the entire environment from zero using
+  only this repository.
 
 ## Design Principles
 
@@ -36,58 +35,62 @@ architectural decision rules.
 
 ## Architecture Overview
 
-The workstation is composed of three layers:
+The environment is composed of four layers:
 
-- **Host layer** — Fedora Workstation, base packages, shell, SSH, Git.
+- **Host layer** — the developer's laptop (any OS). Runs only Vagrant and a
+  hypervisor. Untouched beyond that.
+- **VM layer** — Ubuntu 24.04 LTS virtual machine managed by Vagrant.
+  Created and configured automatically by `provision.sh`.
 - **Tooling layer** — language runtimes (Python, Node.js, Java), cloud CLIs
-  (AWS, Azure, GCP), IaC tools (Terraform, OpenTofu, Kubernetes CLI), IDEs.
-- **Services layer** — containerized local services (PostgreSQL, Redis,
-  RabbitMQ, Neo4j, MySQL, MongoDB, Cassandra, Qdrant, Ollama, Open WebUI)
-  run via Docker/Podman Compose, not installed directly on the host.
+  (AWS, Azure, GCP), IaC tools (Terraform, OpenTofu, kubectl), VS Code, and
+  developer tools — all installed inside the VM by Ansible.
+- **Services layer** — kv-backend's Docker Compose stack (MySQL, Cassandra,
+  Solr, RabbitMQ, Memcached, MailHog, Tomcat) running inside the VM.
 
-Configuration of all three layers is driven by Ansible playbooks and roles,
-invoked through Bash bootstrap scripts. Details: [docs/architecture](./docs/architecture/README.md).
+Details: [docs/architecture](./docs/architecture/README.md).
 
 ## Repository Layout
 
 ```text
 dev-environment/
+├── provision.sh             Single entry point — clone and run this
 ├── README.md                Project entry point (this file)
 ├── ARCHITECTURE.md          Repository philosophy and architectural rules
 ├── LICENSE                  License terms
 ├── CONTRIBUTING.md          Contribution workflow and standards
 ├── CHANGELOG.md             Notable changes per release
-├── ROADMAP.md               Planned automation and documentation work
-├── docs/                    All documentation, organized by concern
-│   ├── architecture/        System design and technology decisions
-│   ├── setup/               Per-tool/service manual setup guides
-│   ├── automation/          How automation (Bash/Ansible/Compose) works
-│   ├── runbooks/            Operational procedures (DR, bootstrap, backup)
-│   ├── troubleshooting/     Known issues and resolutions
-│   ├── security/            Secrets and credential handling
-│   └── decisions/           Architecture Decision Records (ADRs)
-├── bootstrap/                Entry-point bootstrap scripts (placeholders)
-├── scripts/                  Standalone Bash utility scripts (placeholders)
-├── ansible/                   Ansible playbooks, roles, inventory (placeholders)
-│   ├── roles/
-│   └── inventory/
-├── docker/                    Container definitions and Compose stacks
-│   └── compose/
-├── configs/                   Managed application/service configuration files
-├── dotfiles/                   Managed shell and tool dotfiles
-├── templates/                  Reusable file/config templates
-├── tests/                      Automation verification tests
-├── tools/                      Helper/developer tooling for this repo itself
-├── assets/                     Diagrams and other static assets
-└── .github/workflows/          CI workflows
+├── ROADMAP.md               Planned work and what is already built
+├── vm/                      VM definition and first-boot config
+│   ├── Vagrantfile          Multi-provider VM (VirtualBox / KVM / VMware)
+│   ├── cloud-init/          First-boot OS config (user, SSH, packages)
+│   └── scripts/             Helper scripts run inside the VM at boot
+├── ansible/                 All developer tool installation
+│   ├── playbook.yml         Main playbook — runs all roles in order
+│   ├── inventory/           Single-host local-connection inventory
+│   └── roles/               One role per tool: docker, java, node, python,
+│                              terraform, kubectl, cloud_clis,
+│                              developer_tools, kv_backend
+├── workstation-bootstrap/   Direct host install path (no VM required)
+│   ├── setup.sh             OS-aware entry point (macOS/Ubuntu/Fedora)
+│   ├── Makefile             kv-up, kv-init, kv-verify, kv-clean-slate, …
+│   └── scripts/             Per-stage install and verify scripts
+├── assets/                  Static assets (preload Docker images tarball)
+└── docs/                    All documentation, organized by concern
+    ├── architecture/        System design and technology decisions
+    ├── setup/               Per-tool reference guides and manual fallbacks
+    ├── automation/          How automation (Bash/Ansible/Compose) works
+    ├── runbooks/            Operational procedures (provision, DR, backup)
+    ├── troubleshooting/     Known issues and resolutions
+    ├── security/            Secrets and credential handling
+    └── decisions/           Architecture Decision Records (ADRs)
 ```
 
 ## Supported Platforms
 
-- **Primary target:** Fedora Workstation (latest two releases).
-- **Container runtime:** Docker (primary), Podman (optional, rootless).
-- **Not currently supported:** macOS, Windows, other Linux distributions.
-  Contributions to extend support are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+- **Host OS** (the laptop running `provision.sh`): macOS, Ubuntu, Debian, Fedora.
+- **VM OS**: Ubuntu 24.04 LTS (fixed — all developers get the same environment).
+- **Hypervisors**: VirtualBox (default), KVM/libvirt (Linux hosts), VMware Workstation/Fusion.
+- **Direct host install** (no VM, via `workstation-bootstrap/setup.sh`): macOS, Ubuntu, Debian, Fedora.
 
 ## Quick Start — Single Command
 
@@ -132,8 +135,8 @@ See [ROADMAP.md](./ROADMAP.md) for what was built and what is planned next.
 
 ---
 
-**Existing workstation (no VM needed):** if you are already on Ubuntu or
-macOS, use [workstation-bootstrap/](./workstation-bootstrap/) directly:
+**Existing machine (no VM needed):** if you are already on Ubuntu, macOS, or
+Fedora, use [workstation-bootstrap/](./workstation-bootstrap/) directly:
 
 ```bash
 cd workstation-bootstrap
@@ -155,7 +158,7 @@ make kv-verify  # checks all services are reachable
 | Troubleshooting | [docs/troubleshooting/README.md](./docs/troubleshooting/README.md) |
 | Security & secrets | [docs/security/README.md](./docs/security/README.md) |
 | Decision records | [docs/decisions/README.md](./docs/decisions/README.md) |
-| Cross-platform onboarding automation (macOS + Fedora) | [workstation-bootstrap/README.md](./workstation-bootstrap/README.md) |
+| Direct host install (no VM) | [workstation-bootstrap/README.md](./workstation-bootstrap/README.md) |
 
 ## Automation Roadmap
 
@@ -167,7 +170,7 @@ status and planned phases are tracked in [ROADMAP.md](./ROADMAP.md).
 
 | Category | Tools |
 |---|---|
-| OS | Fedora Workstation |
+| VM OS | Ubuntu 24.04 LTS |
 | Containers | Docker, Podman (optional) |
 | Orchestration | Kubernetes |
 | Infrastructure as Code | Terraform, OpenTofu |

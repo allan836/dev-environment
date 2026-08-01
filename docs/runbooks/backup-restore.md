@@ -110,8 +110,7 @@ present and no new GitHub key addition is needed.
 
 ## Automation status
 
-Backup scripts are planned under [scripts/README.md](../../scripts/README.md)
-— see [ROADMAP.md](../../ROADMAP.md) Phase 5.
+Backup scripts are planned under `scripts/` — see [ROADMAP.md](../../ROADMAP.md) Phase 5.
 
 ## References
 

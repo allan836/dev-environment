@@ -31,10 +31,10 @@ Kubernetes — see [docs/troubleshooting/kubernetes.md](./kubernetes.md).
 
 - **Symptom:** `systemctl status docker` shows `failed`.
 - **Cause:** Typically a stale/incompatible `daemon.json` or a conflicting
-  `containerd` version after a `dnf upgrade`.
+  `containerd` version after an `apt upgrade`.
 - **Resolution:** Check `journalctl -u docker -e` for the specific error;
   validate `/etc/docker/daemon.json` syntax; reinstall `containerd.io` if
-  version mismatch is indicated.
+  version mismatch is indicated (`sudo apt-get install --reinstall containerd.io`).
 - **Prevention:** Pin tested versions where stability matters; review
   release notes before major upgrades.
 

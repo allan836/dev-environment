@@ -2,66 +2,72 @@
 
 ## Purpose
 
-Install the Kubernetes CLI (`kubectl`) and establish the approach for
-running a local cluster for development and testing purposes.
+Reference guide for Kubernetes tooling installed inside the developer VM.
 
 ## Scope
 
-Covers `kubectl` installation and local cluster options (e.g. `kind`,
-`minikube`). Does not cover production cluster provisioning — that is
-handled per-project with Terraform/OpenTofu, not this repository. Does not
-cover Docker itself — see [docs/setup/docker.md](./docker.md).
+Covers `kubectl`, Helm, and k9s. Does not cover production cluster
+provisioning — that is project-specific.
 
 ## Prerequisites
 
-- [docs/setup/docker.md](./docker.md) completed (local clusters typically
-  run on top of the container runtime).
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
-## Manual Installation Steps
+## Automation Status
 
-1. Install `kubectl`:
-   ```bash
-   sudo dnf install -y kubernetes-client
-   ```
-2. Choose and install a local cluster tool (one of):
-   ```bash
-   # kind
-   sudo dnf install -y kind
-   # or minikube (from upstream binary release)
-   ```
-3. Create a local cluster (example using `kind`):
-   ```bash
-   kind create cluster --name dev
-   ```
+**Fully automated** by the Ansible `kubectl` role.
+Source: [`ansible/roles/kubectl/tasks/main.yml`](../../ansible/roles/kubectl/tasks/main.yml).
 
-## Configuration
-
-- `kubectl` context and kubeconfig files are treated as machine-local state,
-  not committed to this repository (may contain cluster credentials — see
-  [docs/security/secrets-management.md](../security/secrets-management.md)).
-- Local cluster manifests/examples, if added later, will live under
-  [templates](../../templates/README.md).
+| Tool | What is installed |
+|---|---|
+| `kubectl` | Kubernetes CLI via official Kubernetes apt repo (v1.30) |
+| `helm` | Kubernetes package manager via get-helm-3 script |
+| `k9s` | Terminal UI for Kubernetes clusters |
 
 ## Verification
 
 ```bash
 kubectl version --client
-kind get clusters
-kubectl cluster-info
+helm version
+k9s version
 ```
 
-## Automation Status
+## Local cluster (optional)
 
-Not yet automated. Planned as an Ansible role for CLI installation; cluster
-bootstrap scripting is tracked in [ROADMAP.md](../../ROADMAP.md) Phase 2/3.
+For running a local Kubernetes cluster for testing:
+
+```bash
+# kind (Kubernetes in Docker)
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+chmod +x kind && sudo mv kind /usr/local/bin/
+
+kind create cluster
+kubectl cluster-info --context kind-kind
+```
+
+## Manual Install (fallback only)
+
+```bash
+# kubectl
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+  https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' \
+  | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update && sudo apt-get install -y kubectl
+
+# helm
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
 
 ## References
 
 - [kubectl documentation](https://kubernetes.io/docs/reference/kubectl/)
-- [kind documentation](https://kind.sigs.k8s.io/)
+- [Helm documentation](https://helm.sh/docs/)
+- [k9s documentation](https://k9scli.io/)
 
 ## Related Documents
 
-- [docs/setup/docker.md](./docker.md)
-- [docs/setup/terraform-opentofu.md](./terraform-opentofu.md)
-- [docs/security/secrets-management.md](../security/secrets-management.md)
+- [ansible/roles/kubectl](../../ansible/roles/kubectl/tasks/main.yml)
+- [docs/troubleshooting/kubernetes.md](../troubleshooting/kubernetes.md)

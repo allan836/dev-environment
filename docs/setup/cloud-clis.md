@@ -1,77 +1,92 @@
-# Cloud CLIs Setup
+# Cloud CLIs
 
 ## Purpose
 
-Install and authenticate the command-line interfaces for the three major
-cloud providers used across projects: AWS, Azure, and Google Cloud.
+Reference guide for the cloud provider CLIs installed inside the developer VM.
 
 ## Scope
 
-Covers CLI installation and the general authentication approach. Does not
-cover cloud infrastructure provisioning (Terraform/OpenTofu project
-concern) or storage of long-lived credentials — see
-[docs/security/secrets-management.md](../security/secrets-management.md).
+Covers AWS CLI v2, Azure CLI, and Google Cloud CLI — installation and initial
+authentication. Does not cover cloud infrastructure provisioning, which is
+project-specific.
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
-- Cloud provider accounts already exist (out of scope to provision here).
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
+- Cloud provider accounts already exist.
 
-## Manual Installation Steps
+## Automation Status
+
+**Fully automated** by the Ansible `cloud_clis` role.
+Source: [`ansible/roles/cloud_clis/tasks/main.yml`](../../ansible/roles/cloud_clis/tasks/main.yml).
+
+All three CLIs are installed with `ignore_errors: true` — a failure on one
+does not block provisioning. Check which ones were installed:
+
+```bash
+aws --version
+az --version
+gcloud --version
+```
+
+## Post-install authentication (manual — cannot be automated)
 
 ### AWS CLI
 
 ```bash
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip
-sudo ./aws/install
-rm -rf awscliv2.zip aws/
+aws configure
+# Prompts for: Access Key ID, Secret Access Key, region, output format
+# Or for SSO:
+aws configure sso
 ```
-Authenticate with `aws configure` or `aws configure sso`, per your
-organization's IAM setup.
 
 ### Azure CLI
 
 ```bash
-sudo dnf install -y azure-cli
+az login
+# Opens browser for interactive sign-in
 ```
-Authenticate with `az login`.
 
 ### Google Cloud CLI
 
 ```bash
-sudo dnf install -y https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-x86_64/google-cloud-cli-latest.x86_64.rpm
+gcloud auth login
+gcloud config set project <your-project-id>
 ```
-(Adjust repo path to the current Fedora/EL compatibility target per Google's
-docs.) Authenticate with `gcloud auth login`.
 
-## Configuration
+## Manual Install (fallback only)
 
-- Credential files (`~/.aws/credentials`, `~/.azure/`, `~/.config/gcloud/`)
-  are machine-local and **never** committed to this repository — see
-  [docs/security/secrets-management.md](../security/secrets-management.md).
-- Preferred use of SSO/temporary credentials over long-lived static keys.
-
-## Verification
+If Ansible failed for a specific CLI, run the relevant Ansible role tag:
 
 ```bash
-aws --version && aws sts get-caller-identity
-az --version && az account show
-gcloud --version && gcloud auth list
+cd vm && vagrant ssh -c "
+  cd ~/dev-environment/ansible
+  ansible-playbook playbook.yml -i inventory/hosts.yml --tags aws
+"
 ```
 
-## Automation Status
+Or install manually inside the VM:
 
-Not yet automated. Planned as Ansible roles for CLI installation only;
-authentication remains a manual, human-in-the-loop step by design.
+```bash
+# AWS CLI v2
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+unzip awscliv2.zip && sudo ./aws/install && rm -rf awscliv2.zip aws/
+
+# Azure CLI
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+# Google Cloud CLI
+sudo apt-get install -y google-cloud-cli
+```
 
 ## References
 
-- [AWS CLI install guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-- [Azure CLI install guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux)
-- [gcloud CLI install guide](https://cloud.google.com/sdk/docs/install)
+- [AWS CLI documentation](https://docs.aws.amazon.com/cli/latest/userguide/)
+- [Azure CLI documentation](https://learn.microsoft.com/en-us/cli/azure/)
+- [Google Cloud CLI documentation](https://cloud.google.com/sdk/docs)
 
 ## Related Documents
 
-- [docs/setup/terraform-opentofu.md](./terraform-opentofu.md)
+- [ansible/roles/cloud_clis](../../ansible/roles/cloud_clis/tasks/main.yml)
 - [docs/security/secrets-management.md](../security/secrets-management.md)

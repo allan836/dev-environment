@@ -1,72 +1,95 @@
-# Language Runtimes Setup
+# Language Runtimes
 
 ## Purpose
 
-Install and manage the primary language runtimes used for development:
-Python, Node.js, and Java.
+Reference guide for the language runtimes installed inside the developer VM.
 
 ## Scope
 
-Covers runtime/version-manager installation for these three languages. Does
-not cover project-level dependency management (`pip`, `npm`, `maven`, etc.),
-which is project-specific and out of scope for this repository.
+Covers Node.js, Python, and Java — their version managers, installed
+versions, and how to switch between versions. Does not cover
+project-level dependency management (`npm`, `pip`, `mvn`), which is
+project-specific.
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
-
-## Manual Installation Steps
-
-### Python
-
-```bash
-sudo dnf install -y python3 python3-pip python3-virtualenv pipx
-```
-A version manager (`pyenv`) is recommended for multi-version needs and is
-installed per its upstream instructions rather than via `dnf`.
-
-### Node.js
-
-```bash
-sudo dnf install -y nodejs npm
-```
-For multi-version needs, `nvm` (Node Version Manager) is recommended and
-installed per its upstream instructions.
-
-### Java
-
-```bash
-sudo dnf install -y java-21-openjdk java-21-openjdk-devel
-```
-For multi-version needs, `sdkman` is recommended for managing JDK
-distributions and versions.
-
-## Configuration
-
-- `JAVA_HOME` and version-manager shims are configured via the managed
-  shell dotfiles — see [dotfiles/README.md](../../dotfiles/README.md).
-
-## Verification
-
-```bash
-python3 --version && pip3 --version
-node --version && npm --version
-java -version
-```
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
 ## Automation Status
 
-Not yet automated. Planned as three focused Ansible roles (one per
-language) — see [docs/automation/ansible.md](../automation/ansible.md).
+**Fully automated** by Ansible:
+
+| Runtime | Ansible role | What is installed |
+|---|---|---|
+| Node.js | [`ansible/roles/node`](../../ansible/roles/node/tasks/main.yml) | nvm, Node 18/20/22/24 (default: 20), pnpm |
+| Python | [`ansible/roles/python`](../../ansible/roles/python/tasks/main.yml) | pyenv, Python 3.12 (default), pipenv, uv |
+| Java | [`ansible/roles/java`](../../ansible/roles/java/tasks/main.yml) | SDKMAN, Java 8 (Amazon Corretto) + Java 17 (Oracle, default), Maven 3.8.8 |
+
+## Using Node.js (nvm)
+
+```bash
+# Load nvm (already in .bashrc)
+source ~/.nvm/nvm.sh
+
+nvm list             # installed versions
+nvm use 22           # switch version for this shell
+nvm alias default 20 # change the default
+
+node --version
+pnpm --version
+```
+
+## Using Python (pyenv)
+
+```bash
+pyenv versions       # installed versions
+pyenv global 3.12.0  # set global default
+python3 --version
+
+# Create a project virtualenv
+python3 -m venv .venv && source .venv/bin/activate
+
+# Or with uv (faster)
+uv venv && source .venv/bin/activate
+```
+
+## Using Java (SDKMAN)
+
+```bash
+source ~/.sdkman/bin/sdkman-init.sh
+
+sdk list java          # available JDKs
+sdk use java 8.0.442-amzn  # switch for current shell
+sdk default java 17.0.12-oracle  # set permanent default
+
+java -version
+mvn --version
+```
+
+## Manual Install (fallback only)
+
+If Ansible failed for a specific runtime:
+
+```bash
+# Node via nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+
+# Python via pyenv
+curl -fsSL https://pyenv.run | bash
+
+# Java via SDKMAN
+curl -s "https://get.sdkman.io" | bash
+```
 
 ## References
 
-- [pyenv](https://github.com/pyenv/pyenv)
 - [nvm](https://github.com/nvm-sh/nvm)
-- [SDKMAN!](https://sdkman.io/)
+- [pyenv](https://github.com/pyenv/pyenv)
+- [SDKMAN](https://sdkman.io/)
 
 ## Related Documents
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md)
-- [dotfiles/README.md](../../dotfiles/README.md)
-- [docs/setup/ides.md](./ides.md)
+- [ansible/roles/node](../../ansible/roles/node/tasks/main.yml)
+- [ansible/roles/python](../../ansible/roles/python/tasks/main.yml)
+- [ansible/roles/java](../../ansible/roles/java/tasks/main.yml)

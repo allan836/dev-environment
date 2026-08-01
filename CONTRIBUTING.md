@@ -35,7 +35,7 @@ standards. Does not cover release versioning semantics — see [CHANGELOG.md](./
   Related documents**.
 - Cross-reference existing documents instead of duplicating content.
 - Keep language concise and professional; prefer tables and lists over prose.
-- File names use lowercase kebab-case (e.g. `fedora-base-setup.md`).
+- File names use lowercase kebab-case (e.g. `new-machine-bootstrap.md`).
 
 ## Automation Standards
 

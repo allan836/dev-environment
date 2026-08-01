@@ -39,14 +39,12 @@ Does not cover ongoing operations — see
 |---|---|---|
 | [git-github-ssh.md](./git-github-ssh.md) | Git config, GitHub CLI auth, SSH key management | `developer_tools` |
 | [docker.md](./docker.md) | Docker Engine and Docker Compose | `docker` |
-| [podman.md](./podman.md) | Podman as an optional Docker alternative | Not yet automated |
 | [kubernetes.md](./kubernetes.md) | `kubectl`, Helm, k9s | `kubectl` |
 | [terraform-opentofu.md](./terraform-opentofu.md) | Terraform and OpenTofu CLIs | `terraform` |
 | [languages-runtimes.md](./languages-runtimes.md) | Python (pyenv), Node.js (nvm), Java (SDKMAN) | `python`, `node`, `java` |
 | [cloud-clis.md](./cloud-clis.md) | AWS CLI v2, Azure CLI, Google Cloud CLI | `cloud_clis` |
-| [ides.md](./ides.md) | VS Code, JetBrains IDEs | `developer_tools` (VS Code) |
-| [databases-services.md](./databases-services.md) | MySQL, Cassandra, Solr, RabbitMQ, Memcached, MailHog | `kv_backend` (Compose) |
-| [fedora-base-setup.md](./fedora-base-setup.md) | Fedora host OS setup (direct install path only) | N/A — host-only |
+| [ides.md](./ides.md) | VS Code (automated), JetBrains (manual) | `developer_tools` |
+| [databases-services.md](./databases-services.md) | MySQL, Cassandra, Solr, RabbitMQ, Memcached, MailHog, Tomcat | `kv_backend` (Compose) |
 
 ## Automation status
 

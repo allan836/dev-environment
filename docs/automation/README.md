@@ -34,8 +34,8 @@ Does not cover manual setup steps — see [docs/setup](../setup/README.md).
 | [`ansible/`](../../ansible/) | Playbooks, roles, and inventory | **Implemented** |
 | [`workstation-bootstrap/`](../../workstation-bootstrap/) | Direct host bootstrap (no VM) for existing Ubuntu/macOS machines | **Implemented** |
 | [`docker/compose/`](../../docker/compose/) | General-purpose Compose stacks for AI/data services | Planned — Phase 3 |
-| [`scripts/`](../../scripts/README.md) | Standalone utility scripts (backup, health checks) | Planned — Phase 5 |
-| [`tests/`](../../tests/README.md) | Verification tests for automation | Planned — Phase 4 |
+| `scripts/` | Standalone utility scripts (backup, health checks) | Planned — Phase 5 |
+| `tests/` | Verification tests for automation | Planned — Phase 4 |
 
 ## How it all fits together
 

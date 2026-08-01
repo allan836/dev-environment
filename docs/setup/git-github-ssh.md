@@ -2,70 +2,69 @@
 
 ## Purpose
 
-Configure Git identity, SSH key-based authentication, and GitHub CLI access
-required for all source control operations on this workstation.
+Reference guide for Git identity, SSH key authentication, and GitHub CLI
+access inside the developer VM.
 
 ## Scope
 
-Covers Git configuration, SSH key generation/management, and GitHub CLI
-authentication. Does not cover repository-specific workflow — see
-[CONTRIBUTING.md](../../CONTRIBUTING.md). Does not cover secret storage
-policy — see [docs/security/ssh-key-management.md](../security/ssh-key-management.md).
+Covers Git configuration, SSH key generation, and GitHub CLI authentication.
+Does not cover secret storage policy — see
+[docs/security/ssh-key-management.md](../security/ssh-key-management.md).
 
 ## Prerequisites
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md) completed.
-
-## Manual Installation Steps
-
-1. Install Git and GitHub CLI:
-   ```bash
-   sudo dnf install -y git gh
-   ```
-2. Configure Git identity:
-   ```bash
-   git config --global user.name "Your Name"
-   git config --global user.email "you@example.com"
-   git config --global init.defaultBranch main
-   ```
-3. Generate an SSH key (Ed25519 recommended):
-   ```bash
-   ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519
-   ```
-4. Add the key to the SSH agent and `~/.ssh/config`, then add the public key
-   to GitHub via `gh auth login` or the GitHub web UI.
-
-## Configuration
-
-- Recommended `~/.gitconfig` additions (aliases, `pull.rebase`) are managed
-  as a dotfile — see [dotfiles/README.md](../../dotfiles/README.md).
-- SSH client configuration (`~/.ssh/config`) is also managed as a dotfile;
-  private keys themselves are **never** committed — see
-  [docs/security/ssh-key-management.md](../security/ssh-key-management.md).
-
-## Verification
-
-```bash
-git config --list --global
-ssh -T git@github.com
-gh auth status
-```
-Confirms Git identity, SSH authentication to GitHub, and CLI auth state.
+- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
+- SSH into the VM: `cd vm && vagrant ssh`.
 
 ## Automation Status
 
-Not yet automated. Planned as an Ansible role covering package install and
-dotfile deployment; SSH key generation remains a manual, human-in-the-loop
-step by design (see [docs/security/ssh-key-management.md](../security/ssh-key-management.md)).
+**Partially automated** by the Ansible `developer_tools` role:
+- Git is installed.
+- `init.defaultBranch main` and `pull.rebase false` are configured globally.
+- GitHub CLI (`gh`) is installed.
+- An SSH key (`~/.ssh/id_ed25519`) is generated during `provision.sh`.
+
+**Remains manual:**
+- Adding the SSH public key to your GitHub account — `provision.sh` pauses
+  and prints the key; you paste it into GitHub Settings → SSH keys.
+- `git config --global user.name` and `user.email` — these are personal
+  and must be set by you inside the VM.
+
+## Configure Git identity (inside VM)
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+## Verify SSH authentication to GitHub
+
+```bash
+ssh -T git@github.com
+# Expected: Hi <username>! You've successfully authenticated...
+```
+
+## GitHub CLI authentication
+
+```bash
+gh auth login
+# Follow the interactive prompts (browser or token)
+
+gh auth status
+```
+
+## View your SSH public key
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
 
 ## References
 
-- [GitHub Docs: Connecting with SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)
-- [GitHub CLI Manual](https://cli.github.com/manual/)
+- [GitHub SSH documentation](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)
+- [GitHub CLI](https://cli.github.com/)
 
 ## Related Documents
 
-- [docs/setup/fedora-base-setup.md](./fedora-base-setup.md)
 - [docs/security/ssh-key-management.md](../security/ssh-key-management.md)
-- [CONTRIBUTING.md](../../CONTRIBUTING.md)
-- [dotfiles/README.md](../../dotfiles/README.md)
+- [docs/runbooks/new-machine-bootstrap.md](../runbooks/new-machine-bootstrap.md)

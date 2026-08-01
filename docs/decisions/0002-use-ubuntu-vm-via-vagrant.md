@@ -86,8 +86,7 @@ first is used.
 - `vagrant ssh` is the entry point to the environment, not the native
   terminal.
 - Fedora-specific setup guides (under `docs/setup/`) remain as reference
-  but the `fedora-base-setup.md` guide no longer represents the primary
-  setup path.
+  but Fedora as a host OS is now just one of four supported host platforms.
 
 ## Related Documents
 

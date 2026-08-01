@@ -38,6 +38,5 @@ only officially supported OS for this repository.
 
 ## Related Documents
 
-- [docs/setup/fedora-base-setup.md](../setup/fedora-base-setup.md)
 - [0002-use-ubuntu-vm-via-vagrant.md](./0002-use-ubuntu-vm-via-vagrant.md)
 - [README.md](../../README.md) — Supported Platforms section.
