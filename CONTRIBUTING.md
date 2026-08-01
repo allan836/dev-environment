@@ -46,7 +46,13 @@ standards. Does not cover release versioning semantics — see [CHANGELOG.md](./
 - No secrets committed — see [docs/security/secrets-management.md](./docs/security/secrets-management.md).
 - Shell scripts must pass `shellcheck`; Ansible content must pass `ansible-lint`.
 - Changes to `ansible/roles/` must be tested by running the playbook
-  inside the VM: `vagrant ssh -c "cd ~/dev-environment/ansible && ansible-playbook playbook.yml -i inventory/hosts.yml"`.
+  inside the VM via SSH:
+  ```bash
+  ansible-playbook ansible/playbook.yml \
+    -i "ubuntu@${VM_IP}," \
+    --private-key ~/.ssh/dev-env \
+    --extra-vars "dev_user=${DEV_USER}"
+  ```
 - Changes to `provision.sh` must be tested with `./provision.sh --destroy`
   to verify the full end-to-end flow.
 

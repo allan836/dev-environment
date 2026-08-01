@@ -3,8 +3,8 @@
 ## Purpose
 
 Describe how to recover full developer productivity after catastrophic loss
-of the VM or the host machine (hardware failure, theft, accidental
-`vagrant destroy`).
+of the VM or the host machine (hardware failure, theft, accidental VM
+deletion).
 
 ## Scope
 
@@ -30,14 +30,11 @@ normal recovery path.
 ```bash
 cd dev-environment
 
-# Destroy whatever is left
-cd vm && vagrant destroy -f && cd ..
-
-# Reprovision from scratch (takes ~10-15 min)
-./provision.sh
+# Reprovision from scratch (destroy + rebuild)
+./provision.sh --destroy
 ```
 
-After reprovisioning:
+This takes approximately 10–15 minutes. After reprovisioning:
 1. Add the new VM's SSH public key to GitHub (printed during provisioning).
 2. Restore Docker volume data per [backup-restore.md](./backup-restore.md).
 3. Run `make kv-init` if databases are empty.
@@ -64,33 +61,41 @@ After reprovisioning:
 ## Scenario C — VM snapshot restore
 
 If you took a VM snapshot before a breaking change, restore it directly
-via Vagrant:
+using your provider's snapshot command:
+
+### Multipass
 
 ```bash
-cd vm
-vagrant snapshot list
-vagrant snapshot restore <snapshot-name>
-vagrant up
+multipass restore dev-env <snapshot-name>
 ```
 
-Taking a snapshot before risky changes is recommended:
+### libvirt
 
 ```bash
-cd vm && vagrant snapshot save before-upgrade
+sudo virsh snapshot-restore dev-env <snapshot-name>
 ```
+
+### Incus
+
+```bash
+incus snapshot restore dev-env <snapshot-name>
+```
+
+Taking a snapshot before risky changes is recommended. See
+[backup-restore.md](./backup-restore.md) for snapshot commands per provider.
 
 ## Recovery Time Expectations
 
 | Scenario | Expected time |
 |---|---|
 | VM reprovision (fast internet) | ~10–15 min |
-| New host + full reprovision | ~20–30 min (includes Vagrant/hypervisor install) |
+| New host + full reprovision | ~20–30 min (includes provider install) |
 | DB volume restore (depends on dump size) | Variable |
 
 ## References
 
 - [provision.sh](../../provision.sh)
-- [vm/Vagrantfile](../../vm/Vagrantfile)
+- [backup-restore.md](./backup-restore.md)
 
 ## Related Documents
 

@@ -15,7 +15,7 @@ Does not cover Docker Engine installation — that is handled by the Ansible
 ## Prerequisites
 
 - Docker is installed inside the VM (via Ansible `docker` role).
-- The developer VM is running: `cd vm && vagrant up`.
+- The developer VM is running (use `./provision.sh` or SSH into a running VM).
 
 ## Working Compose stack: kv-backend services
 

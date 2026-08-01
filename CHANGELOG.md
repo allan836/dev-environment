@@ -22,6 +22,82 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] — 2026-08
+
+### Added
+
+- **Three virtualization providers** replacing Vagrant: Multipass
+  (cross-platform), libvirt (Linux native KVM + cloud-init ISO), and Incus
+  (Linux LXD fork). Each provider has its own implementation in
+  `lib/providers/<name>.sh` with a common interface.
+- **`lib/` module library** — modularised provisioning logic:
+  - `lib/log.sh` — structured logging helpers (info, warn, error, banner, die).
+  - `lib/detect.sh` — host OS detection, hardware virtualization probe,
+    provider availability checks.
+  - `lib/dependencies.sh` — provider tool installation with fallback chains
+    (snap → apt → direct download).
+  - `lib/vm.sh` — provider-agnostic VM lifecycle management.
+  - `lib/ansible_runner.sh` — Ansible playbook execution over SSH.
+  - `lib/verify.sh` + `lib/_verify_inside_vm.sh` — post-provisioning
+    verification inside the VM.
+- **`--provider` flag** — force a specific provider (multipass, libvirt, or
+  incus) instead of automatic detection.
+- **`--disk` flag** — custom disk size (default: 40 GB).
+- **`config.env`** — central version configuration file at the repository
+  root. Single source of truth for all software versions.
+- **`ansible/roles/tomcat`** — dedicated Tomcat 9 role (separated from Java
+  role; Tomcat 9 is a critical kv-backend requirement).
+- **SSH-based Ansible** — Ansible runs over SSH from the host, not via
+  `ansible_local` inside the VM. Inventory uses environment variables
+  (`VM_IP`, `VM_SSH_USER`, `VM_SSH_KEY`).
+- **Java via apt** — OpenJDK 8 and 17 installed via `apt` packages
+  (`openjdk-8-jdk`, `openjdk-17-jdk`) instead of SDKMAN. Simpler and
+  faster for the two versions required by kv-backend.
+- **ADR 0003** — documents the decision to replace Vagrant with
+  Multipass/libvirt/Incus providers.
+
+### Changed
+
+- `provision.sh` — rewritten to source `lib/` modules, probe providers in
+  priority order, and run Ansible over SSH instead of via Vagrant.
+- `ansible/inventory/hosts.yml` — changed from `ansible_connection: local`
+  to SSH-based connection using environment variables.
+- `vm/cloud-init/user-data` — preserves `ubuntu` user (required for
+  provider SSH), adds `developer` user with same permissions.
+- `README.md` — updated to reflect provider-based provisioning model.
+- `ARCHITECTURE.md` — updated layer table to reference providers instead
+  of Vagrant.
+- `docs/architecture/overview.md` — rewritten for the provider-based stack.
+- `docs/automation/README.md` — updated directory map and flow diagram.
+- `docs/automation/ansible.md` — updated for SSH-based Ansible, apt-based
+  Java, added Tomcat role.
+- `docs/automation/bash-scripts.md` — updated to document `lib/` modules
+  and provider scripts.
+- `docs/runbooks/new-machine-bootstrap.md` — fully rewritten for
+  provider-based provisioning with per-provider lifecycle commands.
+- `docs/runbooks/backup-restore.md` — updated snapshots section with
+  provider-specific commands.
+- `docs/runbooks/disaster-recovery.md` — updated for provider-based
+  recovery.
+- `docs/runbooks/service-lifecycle.md` — updated SSH instructions.
+- `docs/setup/*.md` — updated SSH instructions from `vagrant ssh` to
+  `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
+- `docs/setup/languages-runtimes.md` — updated Java section from SDKMAN
+  to apt; corrected Maven version to 3.9.6; corrected Node versions to
+  18/20/22 (no 24).
+- `docs/decisions/0002` — status changed to "Superseded by 0003".
+- `CONTRIBUTING.md` — updated testing instructions for SSH-based Ansible.
+- `ROADMAP.md` — updated Phase 1 description to reflect provider model.
+
+### Removed
+
+- **Vagrant** — no longer used as a provisioning abstraction.
+- **`vm/Vagrantfile`** — replaced by `lib/providers/` implementations.
+- **VirtualBox and VMware providers** — replaced by Multipass, libvirt, and
+  Incus.
+
+---
+
 ## [0.2.0] — 2026-08
 
 ### Added

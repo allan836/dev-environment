@@ -20,7 +20,7 @@ Does not cover manual setup steps — see [docs/setup](../setup/README.md).
 
 | Document | Description |
 |---|---|
-| [bash-scripts.md](./bash-scripts.md) | `provision.sh` and utility script conventions |
+| [bash-scripts.md](./bash-scripts.md) | `provision.sh`, `lib/` modules, and utility script conventions |
 | [ansible.md](./ansible.md) | Role structure, inventory, and playbook conventions |
 | [docker-compose.md](./docker-compose.md) | Compose stack conventions for local services |
 
@@ -28,9 +28,12 @@ Does not cover manual setup steps — see [docs/setup](../setup/README.md).
 
 | Repository Path | Purpose | Status |
 |---|---|---|
-| [`provision.sh`](../../provision.sh) | Single entry point — installs Vagrant, hypervisor, boots VM, runs Ansible | **Implemented** |
-| [`vm/Vagrantfile`](../../vm/Vagrantfile) | Multi-provider VM definition (VirtualBox / KVM / VMware) | **Implemented** |
+| [`provision.sh`](../../provision.sh) | Single entry point — probes providers, boots VM, runs Ansible over SSH | **Implemented** |
+| [`config.env`](../../config.env) | Central version configuration (single source of truth) | **Implemented** |
+| [`lib/`](../../lib/) | Core provisioning libraries (log, detect, dependencies, vm, ansible_runner, verify) | **Implemented** |
+| [`lib/providers/`](../../lib/providers/) | Provider implementations (multipass.sh, libvirt.sh, incus.sh) | **Implemented** |
 | [`vm/cloud-init/`](../../vm/cloud-init/) | First-boot OS config (user, SSH, packages) | **Implemented** |
+| [`vm/scripts/`](../../vm/scripts/) | VM-side scripts (provision-vm.sh, wait-for-ssh.sh) | **Implemented** |
 | [`ansible/`](../../ansible/) | Playbooks, roles, and inventory | **Implemented** |
 | [`workstation-bootstrap/`](../../workstation-bootstrap/) | Direct host bootstrap (no VM) for existing Ubuntu/macOS machines | **Implemented** |
 | [`docker/compose/`](../../docker/compose/) | General-purpose Compose stacks for AI/data services | Planned — Phase 3 |
@@ -42,16 +45,19 @@ Does not cover manual setup steps — see [docs/setup](../setup/README.md).
 ```
 provision.sh  (host)
     │
-    ├── installs Vagrant (apt/brew/dnf)
-    ├── installs hypervisor (VirtualBox → KVM → VMware, first success wins)
+    ├── sources lib/ modules (log, detect, dependencies, vm, verify)
     │
-    └── vagrant up (vm/Vagrantfile)
+    ├── probes providers: Multipass → libvirt → Incus (first available wins)
+    ├── installs selected provider (if not present)
+    │
+    └── boots VM via selected provider
             │
             ├── cloud-init (vm/cloud-init/user-data)  — first boot OS setup
             │
-            └── ansible_local (ansible/playbook.yml)  — tool installation
+            └── Ansible over SSH (ansible/playbook.yml)  — tool installation
                     ├── roles/docker
                     ├── roles/java
+                    ├── roles/tomcat
                     ├── roles/node
                     ├── roles/python
                     ├── roles/terraform

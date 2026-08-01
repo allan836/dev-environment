@@ -13,7 +13,8 @@ Does not cover disaster recovery sequencing — see
 
 ## Prerequisites
 
-- VM is running: `cd vm && vagrant up && vagrant ssh`
+- VM is running and accessible via SSH:
+  `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`
 
 ## What Is and Is Not Backed Up by Git
 
@@ -36,21 +37,35 @@ Before any risky change (migration, clean-slate, upgrade), take a VM
 snapshot. This preserves the entire VM state — all Docker volumes, configs,
 and tool state — and can be restored in seconds.
 
+Snapshots are provider-specific:
+
+### Multipass
+
 ```bash
-cd vm
-
-# Save snapshot
-vagrant snapshot save before-migration
-
-# List snapshots
-vagrant snapshot list
-
-# Restore snapshot
-vagrant snapshot restore before-migration
+multipass snapshot dev-env before-migration
+multipass info dev-env              # list snapshots
+multipass restore dev-env before-migration
 ```
 
-Vagrant snapshots live on the host disk. They do not survive `vagrant
-destroy`. For off-machine backup, use database dumps instead.
+### libvirt
+
+```bash
+sudo virsh snapshot-create-as dev-env before-migration
+sudo virsh snapshot-list dev-env
+sudo virsh snapshot-restore dev-env before-migration
+```
+
+### Incus
+
+```bash
+incus snapshot create dev-env before-migration
+incus list dev-env                  # show snapshots
+incus snapshot restore dev-env before-migration
+```
+
+VM snapshots live on the host disk. They do not survive VM deletion via
+`./provision.sh --destroy`. For off-machine backup, use database dumps
+instead.
 
 ## MySQL backup and restore
 
@@ -115,7 +130,9 @@ Backup scripts are planned under `scripts/` — see [ROADMAP.md](../../ROADMAP.m
 ## References
 
 - [Docker volumes documentation](https://docs.docker.com/storage/volumes/#back-up-restore-or-migrate-data-volumes)
-- [Vagrant snapshots](https://developer.hashicorp.com/vagrant/docs/cli/snapshot)
+- [Multipass documentation](https://multipass.run/docs)
+- [libvirt snapshots](https://libvirt.org/manpages/virsh.html#snapshot-related-commands)
+- [Incus snapshots](https://linuxcontainers.org/incus/docs/main/)
 
 ## Related Documents
 

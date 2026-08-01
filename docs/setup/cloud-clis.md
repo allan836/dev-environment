@@ -12,8 +12,8 @@ project-specific.
 
 ## Prerequisites
 
-- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
-- SSH into the VM: `cd vm && vagrant ssh`.
+- Developer VM is running (`./provision.sh` completed).
+- SSH into the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
 - Cloud provider accounts already exist.
 
 ## Automation Status
@@ -60,10 +60,8 @@ gcloud config set project <your-project-id>
 If Ansible failed for a specific CLI, run the relevant Ansible role tag:
 
 ```bash
-cd vm && vagrant ssh -c "
-  cd ~/dev-environment/ansible
-  ansible-playbook playbook.yml -i inventory/hosts.yml --tags aws
-"
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP> \
+  "cd ~/dev-environment/ansible && ansible-playbook playbook.yml -i inventory/hosts.yml --tags aws"
 ```
 
 Or install manually inside the VM:

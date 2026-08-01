@@ -12,8 +12,8 @@ setup. Does not cover individual service Compose stacks — see
 
 ## Prerequisites
 
-- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
-- SSH into the VM: `cd vm && vagrant ssh`.
+- Developer VM is running (`./provision.sh` completed).
+- SSH into the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
 
 ## Automation Status
 

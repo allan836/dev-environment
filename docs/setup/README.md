@@ -41,7 +41,7 @@ Does not cover ongoing operations — see
 | [docker.md](./docker.md) | Docker Engine and Docker Compose | `docker` |
 | [kubernetes.md](./kubernetes.md) | `kubectl`, Helm, k9s | `kubectl` |
 | [terraform-opentofu.md](./terraform-opentofu.md) | Terraform and OpenTofu CLIs | `terraform` |
-| [languages-runtimes.md](./languages-runtimes.md) | Python (pyenv), Node.js (nvm), Java (SDKMAN) | `python`, `node`, `java` |
+| [languages-runtimes.md](./languages-runtimes.md) | Python (pyenv), Node.js (nvm), Java (apt) | `python`, `node`, `java` |
 | [cloud-clis.md](./cloud-clis.md) | AWS CLI v2, Azure CLI, Google Cloud CLI | `cloud_clis` |
 | [ides.md](./ides.md) | VS Code (automated), JetBrains (manual) | `developer_tools` |
 | [databases-services.md](./databases-services.md) | MySQL, Cassandra, Solr, RabbitMQ, Memcached, MailHog, Tomcat | `kv_backend` (Compose) |

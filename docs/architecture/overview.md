@@ -23,17 +23,18 @@ The developer's physical laptop (any OS: macOS, Ubuntu, Debian, or Fedora).
 The host runs only three things managed by this repository:
 
 - **git** — to clone this repository (must be pre-installed).
-- **Vagrant** — installed automatically by `provision.sh`.
-- **A hypervisor** — VirtualBox, KVM/libvirt, or VMware, installed
-  automatically by `provision.sh` in that order.
+- **A virtualization provider** — Multipass, libvirt, or Incus, selected
+  automatically by `provision.sh` in that priority order.
+- **Ansible** — installed on the host by `provision.sh` if not present;
+  runs the playbook over SSH.
 
 The developer's host OS is otherwise untouched. No developer tools are
 installed directly on the laptop.
 
 ### 2. VM Layer
 
-An **Ubuntu 24.04 LTS** virtual machine managed by Vagrant. Created
-automatically by `provision.sh`. This is where all developer work happens.
+An **Ubuntu 24.04 LTS** virtual machine created by the selected provider.
+This is where all developer work happens.
 The VM is reproducible and disposable — destroying and reprovisioning it
 returns to a clean known state.
 
@@ -44,13 +45,15 @@ user account, SSH key, base packages, timezone.
 ### 3. Tooling Layer
 
 Developer tools installed **inside the VM** by the **Ansible playbook**
-(`ansible/playbook.yml`). Each tool has its own Ansible role:
+(`ansible/playbook.yml`). The playbook runs over SSH from the host,
+not inside the VM. Each tool has its own Ansible role:
 
 | Role | Tools installed |
 |---|---|
 | `docker` | Docker Engine, Docker Compose plugin |
-| `java` | Java 8 + 17 (SDKMAN), Maven |
-| `node` | Node 18/20/22/24 (nvm), pnpm |
+| `java` | OpenJDK 8 + 17 (apt), Maven |
+| `tomcat` | Tomcat 9 (kv-backend requirement) |
+| `node` | Node 18/20/22 (nvm), pnpm |
 | `python` | pyenv, Python 3.12, pipenv, uv |
 | `terraform` | Terraform, OpenTofu |
 | `kubectl` | kubectl, Helm, k9s |
@@ -81,15 +84,15 @@ VM via Docker Compose. Managed by `workstation-bootstrap/Makefile`:
 │                                                                  │
 │   git clone + ./provision.sh                                     │
 │       │                                                          │
-│       ├── Vagrant (installed by provision.sh)                    │
-│       └── Hypervisor: VirtualBox → KVM → VMware (auto-selected) │
+│       ├── Provider: Multipass → libvirt → Incus (auto-selected) │
+│       └── Ansible (runs over SSH from the host)                 │
 │                                                                  │
 │  ┌───────────────────────────────────────────────────────────┐   │
-│  │  Ubuntu 24.04 LTS VM  (managed by Vagrant)                │   │
+│  │  Ubuntu 24.04 LTS VM  (created by selected provider)      │   │
 │  │                                                           │   │
 │  │   cloud-init (first boot): user, SSH, base packages       │   │
 │  │                                                           │   │
-│  │   Ansible roles: Docker, Java, Node, Python,              │   │
+│  │   Ansible roles: Docker, Java, Tomcat, Node, Python,      │   │
 │  │     Terraform, kubectl, cloud CLIs, dev tools,            │   │
 │  │     kv-backend                                            │   │
 │  │                                                           │   │
@@ -112,8 +115,10 @@ managed by Docker Compose. See [docs/setup/kubernetes.md](../setup/kubernetes.md
 ## References
 
 - [C4 Model](https://c4model.com/)
-- [Vagrant documentation](https://developer.hashicorp.com/vagrant/docs)
 - [cloud-init documentation](https://cloudinit.readthedocs.io/)
+- [Multipass documentation](https://multipass.run/docs)
+- [libvirt documentation](https://libvirt.org/)
+- [Incus documentation](https://linuxcontainers.org/incus/)
 
 ## Related Documents
 

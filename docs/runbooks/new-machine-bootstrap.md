@@ -23,8 +23,9 @@ The host machine (the laptop running `provision.sh`) needs only two things:
 | `git` installed | `git --version` |
 | Internet access | `curl -I https://github.com` |
 
-Everything else — Vagrant, the hypervisor, Ubuntu itself, all developer
-tools — is installed automatically by `provision.sh`.
+Everything else — the virtualization provider (Multipass, libvirt, or
+Incus), Ansible, Ubuntu itself, all developer tools — is installed
+automatically by `provision.sh`.
 
 **Supported host operating systems:**
 - macOS (Homebrew must be installed: https://brew.sh)
@@ -51,11 +52,12 @@ forward:
 
 | What happens | Detail |
 |---|---|
-| Vagrant installed on host | Via `apt`/`dnf`/`brew` or HashiCorp direct download |
-| Hypervisor installed | VirtualBox tried first, then KVM/libvirt, then VMware |
-| Ubuntu 24.04 VM created | No ISO needed — uses Ubuntu cloud image |
-| cloud-init runs | Creates developer user, sets timezone, installs base packages |
-| Ansible playbook runs | Installs Docker, Java, Node, Python, Terraform, kubectl, AWS/Azure/gcloud CLIs, VS Code, GitHub CLI, openfortivpn, DBeaver |
+| Host OS detected | `lib/detect.sh` identifies macOS, Ubuntu, Debian, or Fedora |
+| Provider probed and installed | Multipass → libvirt → Incus (first available wins); auto-installed if missing |
+| Ubuntu 24.04 VM created | Uses Ubuntu cloud image — no ISO needed |
+| cloud-init runs | Creates `ubuntu` and `developer` users, sets timezone, installs base packages |
+| SSH readiness confirmed | Polls SSH port until the VM is accessible |
+| Ansible playbook runs | Installs Docker, Java, Tomcat, Node, Python, Terraform, kubectl, AWS/Azure/gcloud CLIs, VS Code, GitHub CLI, openfortivpn, DBeaver |
 | SSH key generated | Inside the VM — printed to screen |
 | kv-backend cloned | Requires GitHub SSH key (see Step 3) |
 | Docker services started | `make kv-up` — MySQL, RabbitMQ, Cassandra, Solr, Memcached, Tomcat |
@@ -80,14 +82,16 @@ Verification runs automatically at the end of provisioning. To re-run it
 manually:
 
 ```bash
-cd vm
-vagrant ssh -c "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP> \
+  "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
 ```
 
 ### Provisioner options
 
 ```bash
 ./provision.sh --cpu 6 --ram 12288    # more resources (default: 4 CPU, 8 GB)
+./provision.sh --disk 100             # larger disk (default: 40 GB)
+./provision.sh --provider libvirt     # force a specific provider
 ./provision.sh --destroy              # wipe VM and reprovision from scratch
 ./provision.sh --skip-ansible         # boot VM only, no tool install
 ./provision.sh --help                 # full usage
@@ -95,15 +99,26 @@ vagrant ssh -c "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
 
 ## Day-to-day VM use
 
-```bash
-cd vm
+After provisioning, SSH into the VM using the IP address printed by
+`provision.sh`:
 
-vagrant ssh          # open a shell inside the VM
-vagrant suspend      # pause VM (saves state, frees RAM)
-vagrant resume       # wake the VM back up
-vagrant halt         # shut the VM down cleanly
-vagrant up           # start the VM (if halted or after a reboot)
-vagrant destroy -f   # delete the VM entirely (re-run provision.sh to rebuild)
+```bash
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>
+```
+
+VM lifecycle commands are provider-specific:
+
+| Action | Multipass | libvirt | Incus |
+|---|---|---|---|
+| Stop VM | `multipass stop dev-env` | `sudo virsh shutdown dev-env` | `incus stop dev-env` |
+| Start VM | `multipass start dev-env` | `sudo virsh start dev-env` | `incus start dev-env` |
+| Delete VM | `multipass delete --purge dev-env` | `sudo virsh destroy dev-env && sudo virsh undefine dev-env` | `incus delete --force dev-env` |
+| Get VM IP | `multipass info dev-env` | `sudo virsh domifaddr dev-env` | `incus list dev-env` |
+
+The easiest way to destroy and reprovision:
+
+```bash
+./provision.sh --destroy
 ```
 
 ## Architecture summary
@@ -113,17 +128,18 @@ Laptop (any OS)
     │
     ▼
 provision.sh
-    │  installs Vagrant
-    │  installs hypervisor (VirtualBox → KVM → VMware)
+    │  probes providers: Multipass → libvirt → Incus
+    │  installs selected provider (if not present)
     ▼
-Ubuntu 24.04 VM (via Vagrant)
+Ubuntu 24.04 VM (via selected provider)
     │
     ├── cloud-init  → user, SSH, timezone, base packages
     │
-    └── Ansible playbook
+    └── Ansible playbook (over SSH from host)
             ├── Docker Engine + Compose
-            ├── Java 8 + 17 (SDKMAN), Maven
-            ├── Node 18/20/22/24 (nvm), pnpm
+            ├── Java 8 + 17 (apt), Maven
+            ├── Tomcat 9
+            ├── Node 18/20/22 (nvm), pnpm
             ├── Python (pyenv), pipenv, uv
             ├── Terraform + OpenTofu
             ├── kubectl, Helm, k9s
@@ -148,8 +164,9 @@ make kv-verify  # checks all services are reachable
 ## References
 
 - [provision.sh](../../provision.sh)
-- [vm/Vagrantfile](../../vm/Vagrantfile)
+- [config.env](../../config.env)
 - [ansible/playbook.yml](../../ansible/playbook.yml)
+- [docs/decisions/0003-replace-vagrant-with-multipass-libvirt-incus.md](../decisions/0003-replace-vagrant-with-multipass-libvirt-incus.md)
 
 ## Related Documents
 

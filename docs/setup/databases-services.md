@@ -15,7 +15,7 @@ cover backup procedures — see
 ## Prerequisites
 
 - Developer VM is running and provisioned (`./provision.sh` completed).
-- SSH into the VM: `cd vm && vagrant ssh`.
+- SSH into the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
 - kv-backend is cloned at `~/workspace/repos/kv-backend`.
 
 ## Service Reference

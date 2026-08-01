@@ -7,7 +7,7 @@
 #
 # Usage (run by provision.sh automatically, or manually):
 #   ansible-playbook playbook.yml -i inventory/hosts.yml \
-#     --extra-vars "dev_user=vagrant"
+#     --extra-vars "dev_user=ubuntu"
 #
 # Run specific roles only:
 #   ansible-playbook playbook.yml -i inventory/hosts.yml --tags java,tomcat
@@ -18,7 +18,7 @@
   gather_facts: true
 
   vars:
-    dev_user: "{{ dev_user | default('vagrant') }}"
+    dev_user: "{{ dev_user | default('ubuntu') }}"
     dev_home: "/home/{{ dev_user }}"
 
   pre_tasks:
@@ -74,4 +74,4 @@
           - "Java 8 and Java 17 installed. Default: Java 17."
           - "Switch Java: sudo update-alternatives --config java"
           - "Tomcat 9 installed and running at {{ tomcat_install_dir }}."
-          - "Next: vagrant ssh → cd ~/dev-environment/workstation-bootstrap → make kv-up"
+          - "Next: ssh into VM → cd ~/dev-environment/workstation-bootstrap → make kv-up"

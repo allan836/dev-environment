@@ -32,7 +32,7 @@ make kv-verify    # checks all services are reachable
 | Stage | What | Script |
 |---|---|---|
 | Core tools | Git, Docker, GitHub CLI, OpenVPN, AWS CLI, Terraform, kubectl | `scripts/install-core.sh` |
-| Runtimes | Node 18/20/22/24 (nvm), Python (pyenv), Java 17 + Maven (SDKMAN), pnpm | `scripts/install-runtimes.sh` |
+| Runtimes | Node 18/20/22 (nvm), Python (pyenv), Java 17 + Maven (SDKMAN), pnpm | `scripts/install-runtimes.sh` |
 | Desktop apps | VS Code, DBeaver, Slack, Zoom (best-effort, non-blocking) | `scripts/install-desktop-apps.sh` |
 | Verification | Checks all tools and service ports | `scripts/verify.sh` |
 

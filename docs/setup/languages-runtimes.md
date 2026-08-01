@@ -13,8 +13,8 @@ project-specific.
 
 ## Prerequisites
 
-- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
-- SSH into the VM: `cd vm && vagrant ssh`.
+- Developer VM is running (`./provision.sh` completed).
+- SSH into the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
 
 ## Automation Status
 
@@ -22,9 +22,9 @@ project-specific.
 
 | Runtime | Ansible role | What is installed |
 |---|---|---|
-| Node.js | [`ansible/roles/node`](../../ansible/roles/node/tasks/main.yml) | nvm, Node 18/20/22/24 (default: 20), pnpm |
+| Node.js | [`ansible/roles/node`](../../ansible/roles/node/tasks/main.yml) | nvm, Node 18/20/22 (default: 20), pnpm |
 | Python | [`ansible/roles/python`](../../ansible/roles/python/tasks/main.yml) | pyenv, Python 3.12 (default), pipenv, uv |
-| Java | [`ansible/roles/java`](../../ansible/roles/java/tasks/main.yml) | SDKMAN, Java 8 (Amazon Corretto) + Java 17 (Oracle, default), Maven 3.8.8 |
+| Java | [`ansible/roles/java`](../../ansible/roles/java/tasks/main.yml) | OpenJDK 8 + 17 (apt), Maven 3.9.6 |
 
 ## Using Node.js (nvm)
 
@@ -54,15 +54,16 @@ python3 -m venv .venv && source .venv/bin/activate
 uv venv && source .venv/bin/activate
 ```
 
-## Using Java (SDKMAN)
+## Using Java (apt / update-alternatives)
 
 ```bash
-source ~/.sdkman/bin/sdkman-init.sh
+# List installed Java versions
+sudo update-alternatives --config java
 
-sdk list java          # available JDKs
-sdk use java 8.0.442-amzn  # switch for current shell
-sdk default java 17.0.12-oracle  # set permanent default
+# Switch default (interactive — select from menu)
+sudo update-alternatives --config java
 
+# Verify
 java -version
 mvn --version
 ```
@@ -78,15 +79,14 @@ curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 # Python via pyenv
 curl -fsSL https://pyenv.run | bash
 
-# Java via SDKMAN
-curl -s "https://get.sdkman.io" | bash
+# Java via apt
+sudo apt-get install -y openjdk-8-jdk openjdk-17-jdk
 ```
 
 ## References
 
 - [nvm](https://github.com/nvm-sh/nvm)
 - [pyenv](https://github.com/pyenv/pyenv)
-- [SDKMAN](https://sdkman.io/)
 
 ## Related Documents
 

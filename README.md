@@ -17,13 +17,14 @@ That is all. Everything else is automated.
 `provision.sh` runs in order:
 
 1. Detects your host OS (macOS, Ubuntu, Debian, Fedora)
-2. Installs Vagrant (if not present or version too old)
-3. Detects available hypervisors — VirtualBox → KVM → VMware — and selects the best one
-4. Creates an Ubuntu 24.04 LTS VM with the chosen hypervisor
-5. Runs an Ansible playbook that installs all developer tools inside the VM
-6. Pauses once to show the VM's SSH public key — add it to GitHub (the only manual step)
-7. Clones kv-backend, starts Docker services
-8. Verifies the environment and prints a summary
+2. Probes available virtualization providers — **Multipass** → **libvirt** → **Incus** — and selects the first one that works
+3. Installs the selected provider if it is not already present
+4. Creates an Ubuntu 24.04 LTS VM with the chosen provider
+5. Waits for SSH readiness
+6. Runs an Ansible playbook over SSH that installs all developer tools inside the VM
+7. Pauses once to show the VM's SSH public key — add it to GitHub (the only manual step)
+8. Clones kv-backend, starts Docker services
+9. Verifies the environment and prints a summary
 
 Total time: approximately 15–25 minutes on first run.
 
@@ -37,7 +38,7 @@ Total time: approximately 15–25 minutes on first run.
 | curl or wget | Yes |
 | Internet access | Yes |
 
-Vagrant, the hypervisor, Ubuntu, and every developer tool are installed by the script.
+The provider (Multipass, libvirt, or Incus), Ansible, Ubuntu, and every developer tool are installed by the script.
 
 ---
 
@@ -45,9 +46,11 @@ Vagrant, the hypervisor, Ubuntu, and every developer tool are installed by the s
 
 ```bash
 ./provision.sh --cpu 6 --ram 12288   # more resources (default: 4 vCPU / 8 GB)
-./provision.sh --destroy             # wipe the VM and reprovision from scratch
-./provision.sh --skip-ansible        # boot the VM only, skip tool installation
-./provision.sh --help                # full usage
+./provision.sh --disk 100             # larger disk (default: 40 GB)
+./provision.sh --provider libvirt     # force a specific provider
+./provision.sh --skip-ansible         # boot the VM only, skip tool installation
+./provision.sh --destroy              # wipe the VM and reprovision from scratch
+./provision.sh --help                 # full usage
 ```
 
 ---
@@ -55,10 +58,16 @@ Vagrant, the hypervisor, Ubuntu, and every developer tool are installed by the s
 ## After provisioning
 
 ```bash
-cd vm && vagrant ssh          # SSH into the VM
-cd vm && vagrant suspend      # suspend the VM
-cd vm && vagrant halt         # shut the VM down cleanly
-./provision.sh --destroy      # destroy and reprovision from scratch
+# SSH into the VM (IP is printed by provision.sh)
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>
+
+# Stop / start the VM (provider-specific)
+multipass stop dev-env                # Multipass
+sudo virsh shutdown dev-env           # libvirt
+incus stop dev-env                    # Incus
+
+# Destroy and reprovision from scratch
+./provision.sh --destroy
 ```
 
 Inside the VM, the kv-backend services are managed via:
@@ -84,22 +93,24 @@ make kv-down    # stop services
 | App server | **Tomcat 9** (Tomcat 10/11 are NOT installed — kv-backend compatibility) |
 | Node.js | nvm with Node 18, 20, 22 (default: 20); pnpm |
 | Python | pyenv with Python 3.12; pipenv, uv |
-| IaC | Terraform, kubectl, Helm |
+| IaC | Terraform, OpenTofu |
+| Kubernetes | kubectl, Helm, k9s |
 | Cloud CLIs | AWS CLI, Azure CLI, Google Cloud CLI |
-| Other | tmux, fzf, ripgrep, bat, httpie |
+| Other | VS Code, tmux, fzf, ripgrep, openfortivpn, DBeaver |
 
 ---
 
 ## Supported host platforms
 
-| Host OS | Hypervisor |
-|---------|-----------|
-| macOS   | VirtualBox (default), VMware Fusion |
-| Ubuntu / Debian | VirtualBox, KVM/libvirt (native, faster), VMware Workstation |
-| Fedora  | VirtualBox, KVM/libvirt (native, faster), VMware Workstation |
+| Host OS | Preferred Provider | Fallback |
+|---------|-------------------|----------|
+| macOS   | Multipass | — |
+| Ubuntu / Debian | Multipass | libvirt (native KVM, faster), Incus |
+| Fedora  | Multipass | libvirt (native KVM, faster), Incus |
 
 The provisioner detects what is available and selects automatically.
-You do not need to install or configure any hypervisor manually.
+You can force a specific provider with `--provider`.
+You do not need to install or configure any provider manually.
 
 ---
 

@@ -14,18 +14,18 @@ Covers lifecycle operations for the services managed by
 
 ## Prerequisites
 
-- VM is running: `cd vm && vagrant up`
+- VM is running (use `./provision.sh` or start via your provider).
 - Provisioning is complete: `./provision.sh` has been run at least once.
 
 ## Standard Operations
 
-All commands below are run **inside the VM** via `cd vm && vagrant ssh`, or
-prefixed with `vagrant ssh -c "..."` from the host. The Makefile target is
-the primary interface.
+All commands below are run **inside the VM** via SSH
+(`ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`), or by piping a command through
+SSH. The Makefile target is the primary interface.
 
 ```bash
 # SSH into the VM first
-cd vm && vagrant ssh
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>
 
 # Navigate to the bootstrap directory
 cd ~/dev-environment/workstation-bootstrap

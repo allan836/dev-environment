@@ -32,18 +32,20 @@ Does not cover issue diagnosis — see [docs/troubleshooting](../troubleshooting
 # Provision from scratch (first time or rebuild)
 ./provision.sh
 
-# SSH into the running VM
-cd vm && vagrant ssh
+# SSH into the running VM (IP printed by provision.sh)
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>
 
-# Suspend / resume the VM
-cd vm && vagrant suspend
-cd vm && vagrant resume
+# Stop / start the VM (provider-specific)
+multipass stop dev-env                          # Multipass
+sudo virsh shutdown dev-env                     # libvirt
+incus stop dev-env                              # Incus
 
 # Destroy and reprovision
 ./provision.sh --destroy
 
 # Verify all tools inside VM
-vagrant ssh -c "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
+ssh -i ~/.ssh/dev-env ubuntu@<VM_IP> \
+  "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
 ```
 
 ## References

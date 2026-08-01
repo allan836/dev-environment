@@ -20,10 +20,7 @@ repository.
 ## Container Networking
 
 - Each Compose stack (see [docs/setup/databases-services.md](../setup/databases-services.md))
-  defines its own Docker network to isolate services by concern (e.g.
-  `ai-stack`, `data-stack`).
-- Services that need to talk to each other (e.g. Open WebUI → Ollama, Open
-  WebUI → Qdrant) share a network; unrelated stacks do not.
+  defines its own Docker network to isolate services by concern.
 - No service is exposed beyond `127.0.0.1` unless explicitly required,
   reducing exposure on shared or untrusted networks.
 

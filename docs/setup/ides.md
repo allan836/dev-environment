@@ -11,8 +11,8 @@ after provisioning).
 
 ## Prerequisites
 
-- Developer VM is running (`./provision.sh` completed or `cd vm && vagrant up`).
-- SSH into the VM: `cd vm && vagrant ssh`.
+- Developer VM is running (`./provision.sh` completed).
+- SSH into the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>`.
 
 ## VS Code
 
@@ -26,7 +26,7 @@ the VM is headless, the recommended way to use VS Code is via the **Remote
 SSH extension** on your host laptop:
 
 1. Install the "Remote - SSH" extension in VS Code on your laptop.
-2. Connect to the VM: `ssh vagrant@192.168.56.10` (the VM's private network IP).
+2. Connect to the VM: `ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>` (IP is printed by `provision.sh`).
 3. Open any folder inside the VM — all editing, terminals, and extensions
    run inside the VM.
 

@@ -40,37 +40,46 @@ cd dev-environment
 **What provision.sh does, in order:**
 
 1. Detects host OS (Linux / macOS).
-2. Installs **Vagrant** on the host (apt / dnf / brew / HashiCorp direct).
-   Vagrant is installed by provision.sh itself — no manual prerequisite
-   beyond `git` and internet access.
-3. Tries hypervisor backends **one at a time until one works**:
-   - **VirtualBox** — free, cross-platform, tried first.
-   - **KVM/libvirt** — Linux-native, tried second.
-   - **VMware Workstation/Fusion** — enterprise option, tried third.
-   If a backend fails the VM is destroyed and the next backend is tried.
-4. Boots an Ubuntu 24.04 LTS VM (cloud image — no ISO required).
+2. Probes virtualization providers in priority order —
+   **Multipass** (cross-platform) → **libvirt** (Linux native KVM) →
+   **Incus** (Linux LXD fork) — and selects the first one that works.
+3. Installs the selected provider tool if it is not already present
+   (with multiple fallback methods: snap → apt → direct download).
+4. Boots an Ubuntu 24.04 LTS VM (cloud image — no ISO required) using the
+   selected provider.
 5. Runs cloud-init on first boot (user, SSH, base packages).
-6. Runs the **Ansible playbook** inside the VM (all developer tools).
-7. Prompts the developer to add their SSH key to GitHub (only manual step).
-8. Clones kv-backend.
-9. Starts Docker services via `make kv-up`.
-10. Runs verification and prints "Developer workstation ready."
+6. Waits for SSH readiness.
+7. Runs the **Ansible playbook** over SSH (all developer tools).
+8. Prompts the developer to add their SSH key to GitHub (only manual step).
+9. Clones kv-backend.
+10. Starts Docker services via `make kv-up`.
+11. Runs verification and prints "Developer workstation ready."
 
 **New files:**
 
 | File | Purpose |
 |---|---|
 | `provision.sh` | Root-level single-command entry point |
-| `vm/Vagrantfile` | Multi-provider VM definition (VirtualBox / KVM / VMware) |
+| `config.env` | Central version configuration |
+| `lib/log.sh` | Structured logging helpers |
+| `lib/detect.sh` | Host OS / provider detection |
+| `lib/dependencies.sh` | Provider tool installation |
+| `lib/vm.sh` | Provider-agnostic VM lifecycle |
+| `lib/ansible_runner.sh` | Ansible execution over SSH |
+| `lib/verify.sh` | Post-provisioning verification |
+| `lib/providers/multipass.sh` | Multipass provider implementation |
+| `lib/providers/libvirt.sh` | KVM/libvirt provider implementation |
+| `lib/providers/incus.sh` | Incus provider implementation |
 | `vm/cloud-init/user-data` | First-boot OS configuration |
 | `vm/cloud-init/meta-data` | cloud-init instance identity |
 | `vm/scripts/provision-vm.sh` | Shell setup inside VM before Ansible |
 | `vm/scripts/wait-for-ssh.sh` | TCP poller for SSH readiness |
 | `ansible/playbook.yml` | Main Ansible playbook |
-| `ansible/inventory/hosts.yml` | Ansible inventory |
+| `ansible/inventory/hosts.yml` | Ansible inventory (SSH-based) |
 | `ansible/roles/docker/` | Docker Engine + Compose plugin |
-| `ansible/roles/java/` | Java 8 + 17 via SDKMAN, Maven |
-| `ansible/roles/node/` | Node 18/20/22/24 via nvm, pnpm |
+| `ansible/roles/java/` | Java 8 + 17 via apt, Maven |
+| `ansible/roles/tomcat/` | Tomcat 9 (kv-backend requirement) |
+| `ansible/roles/node/` | Node 18/20/22 via nvm, pnpm |
 | `ansible/roles/python/` | pyenv, pipenv, uv |
 | `ansible/roles/terraform/` | Terraform + OpenTofu |
 | `ansible/roles/kubectl/` | kubectl, Helm, k9s |
@@ -110,8 +119,8 @@ cd dev-environment
 
 ## Non-Goals
 
-- Windows host support: Vagrant + VirtualBox works on Windows but
-  provision.sh uses Bash. A PowerShell wrapper could be added later.
+- Windows host support: the provisioner uses Bash and Linux/macOS
+  providers. A PowerShell wrapper could be added later.
 - Managing secrets/credentials storage backend selection is deferred to
   [docs/security/secrets-management.md](./docs/security/secrets-management.md).
 

@@ -8,17 +8,16 @@ developer tools inside the Ubuntu VM.
 ## Scope
 
 Covers content under [`ansible/`](../../ansible/). Does not cover the VM
-provisioning itself (see `provision.sh`) or Bash scripts (see
-[bash-scripts.md](./bash-scripts.md)) or Compose stacks (see
-[docker-compose.md](./docker-compose.md)).
+provisioning itself (see `provision.sh` and [bash-scripts.md](./bash-scripts.md))
+or Compose stacks (see [docker-compose.md](./docker-compose.md)).
 
 ## Prerequisites
 
 - [ARCHITECTURE.md](../../ARCHITECTURE.md) principles: declarative
   infrastructure, idempotency, manual fallback, verification.
-- The Ansible playbook runs **inside the VM** — it is invoked automatically
-  by `provision.sh` via Vagrant's `ansible_local` provisioner. Ansible
-  does not need to be installed on the host machine.
+- The Ansible playbook runs **over SSH from the host** — it is invoked
+  automatically by `provision.sh` after the VM is booted. Ansible is
+  installed on the host by `provision.sh` if not present.
 
 ## Structure
 
@@ -26,11 +25,15 @@ provisioning itself (see `provision.sh`) or Bash scripts (see
 ansible/
 ├── playbook.yml              Top-level playbook — runs all roles in order
 ├── inventory/
-│   └── hosts.yml             Single-host local-connection inventory
+│   └── hosts.yml             Environment-variable-driven SSH inventory
+├── group_vars/
+│   └── all/
+│       └── versions.yml      Software versions (mirrors config.env)
 └── roles/
     ├── docker/               Docker Engine + Compose plugin
-    ├── java/                 Java 8 + 17 (SDKMAN), Maven
-    ├── node/                 Node 18/20/22/24 (nvm), pnpm
+    ├── java/                 Java 8 + 17 (apt), Maven
+    ├── tomcat/               Tomcat 9 (kv-backend requirement)
+    ├── node/                 Node 18/20/22 (nvm), pnpm
     ├── python/               pyenv, pipenv, uv
     ├── terraform/            Terraform + OpenTofu
     ├── kubectl/              kubectl, Helm, k9s
@@ -59,42 +62,54 @@ ansible/
 
 ## Running the playbook manually
 
-To re-run the full playbook against the running VM:
+`provision.sh` sets the `VM_IP`, `VM_SSH_USER`, and `VM_SSH_KEY` environment
+variables after booting the VM. To re-run the full playbook manually:
 
 ```bash
-cd vm
-vagrant ssh -c "
-  cd ~/dev-environment/ansible
-  ansible-playbook playbook.yml -i inventory/hosts.yml -v
-"
+ansible-playbook ansible/playbook.yml \
+  -i "ubuntu@${VM_IP}," \
+  --private-key ~/.ssh/dev-env \
+  --extra-vars "dev_user=${DEV_USER}" \
+  -v
 ```
 
 To run only specific roles using tags:
 
 ```bash
-vagrant ssh -c "
-  cd ~/dev-environment/ansible
-  ansible-playbook playbook.yml -i inventory/hosts.yml --tags docker,java
-"
+ansible-playbook ansible/playbook.yml \
+  -i "ubuntu@${VM_IP}," \
+  --private-key ~/.ssh/dev-env \
+  --extra-vars "dev_user=${DEV_USER}" \
+  --tags docker,java
 ```
 
-Available tags: `docker`, `java`, `runtimes`, `node`, `python`, `terraform`,
-`iac`, `kubectl`, `kubernetes`, `k8s`, `cloud`, `aws`, `azure`, `gcp`,
-`tools`, `git`, `vscode`, `kv`, `kv-backend`.
+Available tags: `docker`, `java`, `tomcat`, `runtimes`, `node`, `python`,
+`terraform`, `iac`, `kubectl`, `kubernetes`, `k8s`, `cloud`, `aws`,
+`azure`, `gcp`, `tools`, `git`, `kv`, `kv-backend`.
 
 ## Inventory
 
-`ansible/inventory/hosts.yml` uses `ansible_connection: local` because the
-playbook runs on the VM itself (via `ansible_local`). When targeting a
-remote machine (e.g. a cloud instance), override the connection:
+`ansible/inventory/hosts.yml` uses environment variables (`VM_IP`,
+`VM_SSH_USER`, `VM_SSH_KEY`) so the same inventory works regardless of
+which provider (Multipass, libvirt, or Incus) booted the VM. When running
+manually, override the connection:
 
 ```bash
 ansible-playbook playbook.yml \
   -i <remote-ip>, \
   -u ubuntu \
-  --private-key ~/.ssh/id_ed25519 \
+  --private-key ~/.ssh/dev-env \
   --extra-vars "dev_user=ubuntu"
 ```
+
+## Version configuration
+
+All software versions have two sources that must be kept in sync:
+
+- [`config.env`](../../config.env) — shell variables (used by provision.sh and lib/ scripts)
+- [`ansible/group_vars/all/versions.yml`](../../ansible/group_vars/all/versions.yml) — Ansible variables (used by roles)
+
+When bumping a version, update both files.
 
 ## Next steps (Phase 2 — see ROADMAP)
 
