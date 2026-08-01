@@ -61,9 +61,10 @@ Does not cover specific tool installation steps — see [docs/setup](./docs/setu
 
 | Layer | Responsibility | Primary Mechanism |
 |---|---|---|
-| Host | OS, packages, shell, SSH, Git | Bash bootstrap + Ansible |
-| Tooling | Languages, cloud CLIs, IaC tools, IDEs | Ansible roles |
-| Services | Databases, brokers, AI stack | Docker Compose |
+| Host | Developer's laptop (any OS) — runs Vagrant and hypervisor only | `provision.sh` |
+| VM | Ubuntu 24.04 LTS virtual machine — isolated, reproducible, disposable | Vagrant + cloud-init |
+| Tooling | Languages, cloud CLIs, IaC tools, IDEs — installed inside the VM | Ansible roles |
+| Services | kv-backend Docker Compose stack — MySQL, Cassandra, Solr, RabbitMQ, etc. | Docker Compose via Makefile |
 
 Full component-level design is in [docs/architecture/overview.md](./docs/architecture/overview.md).
 

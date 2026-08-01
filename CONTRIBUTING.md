@@ -14,7 +14,8 @@ standards. Does not cover release versioning semantics — see [CHANGELOG.md](./
 ## Prerequisites
 
 - Read [README.md](./README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) first.
-- Git and GitHub CLI configured locally (see [docs/setup/git-github-ssh.md](./docs/setup/git-github-ssh.md)).
+- Run `./provision.sh` to have a working local VM before making changes.
+- Git and GitHub CLI are configured inside the VM automatically by provisioning.
 
 ## Workflow
 
@@ -36,15 +37,18 @@ standards. Does not cover release versioning semantics — see [CHANGELOG.md](./
 - Keep language concise and professional; prefer tables and lists over prose.
 - File names use lowercase kebab-case (e.g. `fedora-base-setup.md`).
 
-## Automation Standards (once implementation begins)
+## Automation Standards
 
 - All scripts and playbooks must be idempotent (safe to re-run).
 - Every automated task must have its manual fallback documented in the
   corresponding `docs/setup` guide.
 - Every task must include a verification step.
 - No secrets committed — see [docs/security/secrets-management.md](./docs/security/secrets-management.md).
-- Shell scripts pass `shellcheck`; Ansible content passes `ansible-lint`
-  (enforced via CI, see [.github/workflows](./.github/workflows)).
+- Shell scripts must pass `shellcheck`; Ansible content must pass `ansible-lint`.
+- Changes to `ansible/roles/` must be tested by running the playbook
+  inside the VM: `vagrant ssh -c "cd ~/dev-environment/ansible && ansible-playbook playbook.yml -i inventory/hosts.yml"`.
+- Changes to `provision.sh` must be tested with `./provision.sh --destroy`
+  to verify the full end-to-end flow.
 
 ## Commit Conventions
 

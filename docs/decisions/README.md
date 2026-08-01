@@ -22,7 +22,8 @@ belong in the relevant [docs/setup](../setup/README.md) or
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](./0001-use-fedora-as-base-os.md) | Use Fedora Workstation as the base OS | Accepted |
+| [0001](./0001-use-fedora-as-base-os.md) | Use Fedora Workstation as the base OS | Superseded by 0002 |
+| [0002](./0002-use-ubuntu-vm-via-vagrant.md) | Use Ubuntu 24.04 VM via Vagrant as the developer environment | Accepted |
 
 ## ADR Process
 

@@ -2,52 +2,64 @@
 
 ## Purpose
 
-Index of manual, step-by-step setup guides for every tool and service
-supported on this workstation. Each guide is the authoritative manual
-procedure that automation (Bash/Ansible/Compose) is intended to eventually
-replace.
+Index of reference guides documenting how each tool and service is
+configured in this developer environment. These guides serve two purposes:
+
+1. **Reference** — understand what was installed and why, and how to
+   configure a tool after provisioning.
+2. **Manual fallback** — if automation fails for a specific tool, the guide
+   documents how to install it by hand.
+
+## Important: automation handles installation
+
+**You do not need to follow these guides to set up a new machine.**
+Run `./provision.sh` from the repository root — it installs everything
+automatically. See
+[docs/runbooks/new-machine-bootstrap.md](../runbooks/new-machine-bootstrap.md)
+for the full provisioning procedure.
+
+These guides are relevant when:
+- You need to understand what was installed inside the VM.
+- You are troubleshooting a specific tool that Ansible failed to install.
+- You are configuring a tool after provisioning (e.g. signing into GitHub
+  CLI, configuring AWS credentials).
+- You are using `workstation-bootstrap/setup.sh` directly on an existing
+  machine without the VM.
 
 ## Scope
 
-Covers installation and initial configuration of host tooling and
-containerized services on Fedora Workstation. Does not cover ongoing
-operations (see [docs/runbooks](../runbooks/README.md)) or issue resolution
-(see [docs/troubleshooting](../troubleshooting/README.md)).
-
-## Prerequisites
-
-- Fedora Workstation installed — start with
-  [fedora-base-setup.md](./fedora-base-setup.md) before any other guide.
+Covers installation and initial configuration of tools inside the Ubuntu
+VM (or on a supported host OS when using `workstation-bootstrap/` directly).
+Does not cover ongoing operations — see
+[docs/runbooks](../runbooks/README.md).
 
 ## Contents
 
-| Guide | Covers |
-|---|---|
-| [fedora-base-setup.md](./fedora-base-setup.md) | Base OS configuration, DNF, updates |
-| [git-github-ssh.md](./git-github-ssh.md) | Git, GitHub CLI/auth, SSH keys |
-| [docker.md](./docker.md) | Docker Engine and Docker Compose |
-| [podman.md](./podman.md) | Podman as an optional Docker alternative |
-| [kubernetes.md](./kubernetes.md) | `kubectl` and local cluster options |
-| [terraform-opentofu.md](./terraform-opentofu.md) | Terraform and OpenTofu CLIs |
-| [languages-runtimes.md](./languages-runtimes.md) | Python, Node.js, Java |
-| [cloud-clis.md](./cloud-clis.md) | AWS CLI, Azure CLI, Google Cloud CLI |
-| [ides.md](./ides.md) | VS Code, JetBrains IDEs |
-| [databases-services.md](./databases-services.md) | PostgreSQL, MySQL, MongoDB, Cassandra, Redis, RabbitMQ, Neo4j, Qdrant, Ollama, Open WebUI |
+| Guide | Covers | Ansible role |
+|---|---|---|
+| [git-github-ssh.md](./git-github-ssh.md) | Git config, GitHub CLI auth, SSH key management | `developer_tools` |
+| [docker.md](./docker.md) | Docker Engine and Docker Compose | `docker` |
+| [podman.md](./podman.md) | Podman as an optional Docker alternative | Not yet automated |
+| [kubernetes.md](./kubernetes.md) | `kubectl`, Helm, k9s | `kubectl` |
+| [terraform-opentofu.md](./terraform-opentofu.md) | Terraform and OpenTofu CLIs | `terraform` |
+| [languages-runtimes.md](./languages-runtimes.md) | Python (pyenv), Node.js (nvm), Java (SDKMAN) | `python`, `node`, `java` |
+| [cloud-clis.md](./cloud-clis.md) | AWS CLI v2, Azure CLI, Google Cloud CLI | `cloud_clis` |
+| [ides.md](./ides.md) | VS Code, JetBrains IDEs | `developer_tools` (VS Code) |
+| [databases-services.md](./databases-services.md) | MySQL, Cassandra, Solr, RabbitMQ, Memcached, MailHog | `kv_backend` (Compose) |
+| [fedora-base-setup.md](./fedora-base-setup.md) | Fedora host OS setup (direct install path only) | N/A — host-only |
 
-## Guide Structure Convention
+## Automation status
 
-Every guide in this directory follows the same internal structure in
-addition to the standard five sections: **Manual Installation Steps**,
-**Configuration**, **Verification**, and **Automation Status** (linking to
-the corresponding Ansible role or Compose service once implemented, per
-[ARCHITECTURE.md](../../ARCHITECTURE.md) principle 7).
+All tools listed above are installed automatically by the Ansible playbook
+when you run `./provision.sh`. The "Ansible role" column above shows which
+role is responsible. Source: [`ansible/roles/`](../../ansible/roles/).
 
 ## References
 
-- [Fedora Documentation](https://docs.fedoraproject.org/)
+- [ansible/playbook.yml](../../ansible/playbook.yml)
 
 ## Related Documents
 
-- [docs/architecture/README.md](../architecture/README.md)
 - [docs/automation/README.md](../automation/README.md)
 - [docs/runbooks/new-machine-bootstrap.md](../runbooks/new-machine-bootstrap.md)
+- [docs/architecture/overview.md](../architecture/overview.md)

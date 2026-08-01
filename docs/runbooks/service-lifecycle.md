@@ -2,66 +2,131 @@
 
 ## Purpose
 
-Describe the day-to-day operations of starting, stopping, updating, and
-tearing down containerized local services.
+Describe the day-to-day operations for starting, stopping, rebuilding, and
+verifying the kv-backend Docker services that run inside the developer VM.
 
 ## Scope
 
-Covers lifecycle operations for the services defined in
-[docs/setup/databases-services.md](../setup/databases-services.md). Does not
-cover backup/restore — see
-[docs/runbooks/backup-restore.md](./backup-restore.md).
+Covers lifecycle operations for the services managed by
+`workstation-bootstrap/`. Does not cover backup/restore — see
+[backup-restore.md](./backup-restore.md). Does not cover VM lifecycle (start
+/ suspend / destroy) — see [new-machine-bootstrap.md](./new-machine-bootstrap.md).
 
 ## Prerequisites
 
-- [docs/setup/docker.md](../setup/docker.md) completed.
-- Compose stacks present under [docker/compose](../../docker/compose)
-  (planned — see [ROADMAP.md](../../ROADMAP.md)).
+- VM is running: `cd vm && vagrant up`
+- Provisioning is complete: `./provision.sh` has been run at least once.
 
-## Standard Operations (Pattern)
+## Standard Operations
 
-Once Compose stacks are implemented, the standard pattern will be:
+All commands below are run **inside the VM** via `cd vm && vagrant ssh`, or
+prefixed with `vagrant ssh -c "..."` from the host. The Makefile target is
+the primary interface.
 
 ```bash
-# Start a stack
-docker compose -f docker/compose/<stack>.yml up -d
+# SSH into the VM first
+cd vm && vagrant ssh
 
-# Check status
-docker compose -f docker/compose/<stack>.yml ps
+# Navigate to the bootstrap directory
+cd ~/dev-environment/workstation-bootstrap
+```
 
-# View logs
-docker compose -f docker/compose/<stack>.yml logs -f <service>
+### Start all services
 
-# Update to a new pinned image version
-docker compose -f docker/compose/<stack>.yml pull
-docker compose -f docker/compose/<stack>.yml up -d
+```bash
+make kv-up
+```
 
-# Stop (preserving volumes/data)
-docker compose -f docker/compose/<stack>.yml down
+Starts MySQL, RabbitMQ, Cassandra, Solr, Memcached, and Tomcat/portal via
+Docker Compose. On first run this also builds any WARs that are not yet
+built.
 
-# Full teardown (destroys data — confirm backups first)
-docker compose -f docker/compose/<stack>.yml down -v
+### First-time initialisation (run once after kv-up)
+
+```bash
+make kv-init
+```
+
+Runs the kv-backend database and Cassandra schema initialisation. Only
+needed the first time, or after `make kv-clean-slate`.
+
+### Check service status
+
+```bash
+make kv-status
+# or
+docker compose ps
+```
+
+### Verify services are reachable
+
+```bash
+make kv-verify
+```
+
+Checks that all service ports are accepting connections and prints a health
+summary.
+
+### View logs
+
+```bash
+make kv-logs              # follow all services
+docker compose logs -f mysql   # a single service
+```
+
+### Stop services (preserving data)
+
+```bash
+docker compose down
+```
+
+Data volumes are preserved. `make kv-up` restarts from where it stopped.
+
+### Clean slate — wipe and rebuild from zero
+
+```bash
+make kv-clean-slate
+```
+
+Destroys all volumes, removes containers, and triggers a fresh
+`kv-up` + `kv-init`. Use this when databases are in a corrupt or unknown
+state.
+
+To seed from Uniserver instead of a local init:
+
+```bash
+make kv-clean-slate-remote
+```
+
+(Requires `UNISERVER_HOST`, `UNISERVER_USER`, `UNISERVER_DB_PASSWORD` in
+`workstation-bootstrap/.env`.)
+
+### Bring services down entirely
+
+```bash
+make kv-down
 ```
 
 ## Update Policy
 
-Image versions are pinned explicitly (see
-[docs/automation/docker-compose.md](../automation/docker-compose.md)).
-Updating a service means deliberately bumping the pinned tag in the Compose
-file, not relying on `latest`, so upgrades are reviewed and reversible.
+Container image versions are pinned in
+`kv-backend/preload-docker-compose/docker-compose.yml`. To update a service:
 
-## Verification After Any Lifecycle Change
+1. Change the pinned image tag.
+2. Run `docker compose pull <service>`.
+3. Run `docker compose up -d <service>`.
+4. Verify with `make kv-verify`.
 
-Always re-run the relevant verification command from
-[docs/setup/databases-services.md](../setup/databases-services.md) after
-starting or updating a service.
+Never use `latest` tags — pinned versions keep the environment reproducible
+and upgrades intentional.
 
 ## References
 
-- [Docker Compose CLI reference](https://docs.docker.com/reference/cli/docker/compose/)
+- [workstation-bootstrap/Makefile](../../workstation-bootstrap/Makefile)
+- [workstation-bootstrap/scripts/kv-backend.sh](../../workstation-bootstrap/scripts/kv-backend.sh)
 
 ## Related Documents
 
-- [docs/setup/databases-services.md](../setup/databases-services.md)
-- [docs/automation/docker-compose.md](../automation/docker-compose.md)
-- [docs/runbooks/backup-restore.md](./backup-restore.md)
+- [backup-restore.md](./backup-restore.md)
+- [new-machine-bootstrap.md](./new-machine-bootstrap.md)
+- [docs/troubleshooting/docker.md](../troubleshooting/docker.md)

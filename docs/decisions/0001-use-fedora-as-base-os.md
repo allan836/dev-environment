@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0002](./0002-use-ubuntu-vm-via-vagrant.md)
 
 ## Context
 
@@ -30,14 +30,14 @@ only officially supported OS for this repository.
 
 ## Consequences
 
-- All setup guides ([docs/setup](../setup/README.md)) use `dnf` and
-  Fedora-specific repositories.
-- Ansible roles (once implemented) target the `dnf`/`systemd` toolchain
-  exclusively.
-- Multi-OS support (macOS/Windows) is explicitly out of scope unless a
-  future ADR supersedes this one.
+- All original setup guides under [docs/setup](../setup/README.md) used
+  `dnf` and Fedora-specific repositories.
+- This decision was superseded when the team moved to a VM-based model
+  (see ADR 0002), where the VM OS is Ubuntu 24.04 LTS and the host OS
+  can be anything with Vagrant/VirtualBox support.
 
 ## Related Documents
 
 - [docs/setup/fedora-base-setup.md](../setup/fedora-base-setup.md)
+- [0002-use-ubuntu-vm-via-vagrant.md](./0002-use-ubuntu-vm-via-vagrant.md)
 - [README.md](../../README.md) — Supported Platforms section.

@@ -2,61 +2,158 @@
 
 ## Purpose
 
-Provide the end-to-end procedure for turning a fresh Fedora Workstation
-install into a fully configured developer workstation using this
-repository.
+Provide the end-to-end procedure for turning any laptop or workstation into
+a fully configured developer environment using this repository. This runbook
+reflects the current automated setup — no manual OS installation or
+tool-by-tool configuration is required.
 
 ## Scope
 
-Covers the sequence of steps and links to the relevant guides. Does not
-duplicate installation instructions themselves — each linked guide is the
-source of truth for its tool. Does not cover recovering from data loss —
-see [docs/runbooks/disaster-recovery.md](./disaster-recovery.md).
+Covers the complete provisioning sequence from a bare laptop (any supported
+host OS) to a running Ubuntu 24.04 developer VM with all tools installed.
+Does not cover recovering from data loss — see
+[disaster-recovery.md](./disaster-recovery.md).
 
 ## Prerequisites
 
-- Fedora Workstation ISO written and installed on the target machine.
-- Network connectivity.
-- Access to this Git repository (via HTTPS clone initially, before SSH is
-  configured).
+The host machine (the laptop running `provision.sh`) needs only two things:
+
+| Requirement | How to check |
+|---|---|
+| `git` installed | `git --version` |
+| Internet access | `curl -I https://github.com` |
+
+Everything else — Vagrant, the hypervisor, Ubuntu itself, all developer
+tools — is installed automatically by `provision.sh`.
+
+**Supported host operating systems:**
+- macOS (Homebrew must be installed: https://brew.sh)
+- Ubuntu / Debian
+- Fedora
 
 ## Procedure
 
-1. **Base OS** — follow [docs/setup/fedora-base-setup.md](../setup/fedora-base-setup.md).
-2. **Git & SSH** — follow [docs/setup/git-github-ssh.md](../setup/git-github-ssh.md),
-   then re-clone this repository over SSH if it was initially cloned via
-   HTTPS.
-3. **Container runtime** — follow [docs/setup/docker.md](../setup/docker.md)
-   (and optionally [docs/setup/podman.md](../setup/podman.md)).
-4. **Language runtimes** — follow [docs/setup/languages-runtimes.md](../setup/languages-runtimes.md).
-5. **Cloud CLIs** — follow [docs/setup/cloud-clis.md](../setup/cloud-clis.md).
-6. **IaC & Kubernetes tooling** — follow
-   [docs/setup/terraform-opentofu.md](../setup/terraform-opentofu.md) and
-   [docs/setup/kubernetes.md](../setup/kubernetes.md).
-7. **IDEs** — follow [docs/setup/ides.md](../setup/ides.md).
-8. **Local services** — follow [docs/setup/databases-services.md](../setup/databases-services.md)
-   to bring up required containerized services.
-9. **Restore data (if applicable)** — if recovering from a previous
-   machine, follow [docs/runbooks/backup-restore.md](./backup-restore.md)
-   to restore volumes before considering the machine "warm".
-10. **Verify** — run the verification steps listed in each guide above to
-    confirm the machine is in a known-good state.
+### Step 1 — Clone the repository
 
-## Future Automation
-
-Once implemented, steps 1–8 will be replaced by a single command:
 ```bash
-./bootstrap/bootstrap.sh
+git clone https://github.com/allan836/dev-environment.git
+cd dev-environment
 ```
-See [bootstrap/README.md](../../bootstrap/README.md) and
-[docs/automation/README.md](../automation/README.md) for status.
+
+### Step 2 — Run the provisioner
+
+```bash
+./provision.sh
+```
+
+That is the entire procedure. The script handles everything from this point
+forward:
+
+| What happens | Detail |
+|---|---|
+| Vagrant installed on host | Via `apt`/`dnf`/`brew` or HashiCorp direct download |
+| Hypervisor installed | VirtualBox tried first, then KVM/libvirt, then VMware |
+| Ubuntu 24.04 VM created | No ISO needed — uses Ubuntu cloud image |
+| cloud-init runs | Creates developer user, sets timezone, installs base packages |
+| Ansible playbook runs | Installs Docker, Java, Node, Python, Terraform, kubectl, AWS/Azure/gcloud CLIs, VS Code, GitHub CLI, openfortivpn, DBeaver |
+| SSH key generated | Inside the VM — printed to screen |
+| kv-backend cloned | Requires GitHub SSH key (see Step 3) |
+| Docker services started | `make kv-up` — MySQL, RabbitMQ, Cassandra, Solr, Memcached, Tomcat |
+| Verification printed | All tools and services reported with versions |
+
+### Step 3 — Add SSH key to GitHub (only manual step)
+
+During provisioning `provision.sh` pauses and prints the VM's public SSH
+key. Add it to your GitHub account before pressing Enter:
+
+1. Copy the `ssh-ed25519 ...` line printed on screen.
+2. Go to GitHub → Settings → SSH and GPG keys → New SSH key.
+3. Paste the key and save.
+4. Press Enter in the terminal to continue.
+
+This is the only step that cannot be automated — GitHub requires you to
+authenticate as yourself.
+
+### Step 4 — Verify
+
+Verification runs automatically at the end of provisioning. To re-run it
+manually:
+
+```bash
+cd vm
+vagrant ssh -c "~/dev-environment/workstation-bootstrap/scripts/verify.sh"
+```
+
+### Provisioner options
+
+```bash
+./provision.sh --cpu 6 --ram 12288    # more resources (default: 4 CPU, 8 GB)
+./provision.sh --destroy              # wipe VM and reprovision from scratch
+./provision.sh --skip-ansible         # boot VM only, no tool install
+./provision.sh --help                 # full usage
+```
+
+## Day-to-day VM use
+
+```bash
+cd vm
+
+vagrant ssh          # open a shell inside the VM
+vagrant suspend      # pause VM (saves state, frees RAM)
+vagrant resume       # wake the VM back up
+vagrant halt         # shut the VM down cleanly
+vagrant up           # start the VM (if halted or after a reboot)
+vagrant destroy -f   # delete the VM entirely (re-run provision.sh to rebuild)
+```
+
+## Architecture summary
+
+```
+Laptop (any OS)
+    │
+    ▼
+provision.sh
+    │  installs Vagrant
+    │  installs hypervisor (VirtualBox → KVM → VMware)
+    ▼
+Ubuntu 24.04 VM (via Vagrant)
+    │
+    ├── cloud-init  → user, SSH, timezone, base packages
+    │
+    └── Ansible playbook
+            ├── Docker Engine + Compose
+            ├── Java 8 + 17 (SDKMAN), Maven
+            ├── Node 18/20/22/24 (nvm), pnpm
+            ├── Python (pyenv), pipenv, uv
+            ├── Terraform + OpenTofu
+            ├── kubectl, Helm, k9s
+            ├── AWS CLI v2, Azure CLI, gcloud
+            ├── VS Code, GitHub CLI, openfortivpn, DBeaver
+            └── kv-backend clone + Docker services
+```
+
+## Existing workstation (no VM needed)
+
+If you are already running Ubuntu, Debian, macOS, or Fedora and do not need
+a VM, use `workstation-bootstrap/` directly:
+
+```bash
+cd workstation-bootstrap
+./setup.sh      # installs all tools on the host
+make kv-up      # starts kv-backend docker-compose stack
+make kv-init    # first-time DB/Cassandra/Solr init
+make kv-verify  # checks all services are reachable
+```
 
 ## References
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md)
+- [provision.sh](../../provision.sh)
+- [vm/Vagrantfile](../../vm/Vagrantfile)
+- [ansible/playbook.yml](../../ansible/playbook.yml)
 
 ## Related Documents
 
-- [docs/setup/README.md](../setup/README.md)
+- [ARCHITECTURE.md](../../ARCHITECTURE.md)
 - [docs/runbooks/disaster-recovery.md](./disaster-recovery.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [docs/runbooks/service-lifecycle.md](./service-lifecycle.md)
+- [workstation-bootstrap/README.md](../../workstation-bootstrap/README.md)

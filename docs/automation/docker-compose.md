@@ -1,60 +1,88 @@
-# Docker Compose Automation Conventions
+# Docker Compose
 
 ## Purpose
 
-Define how local containerized services will be organized as Docker Compose
-stacks once implemented, so services are consistent, isolated, and easy to
-manage individually.
+Document how Docker Compose is used for local developer services in this
+repository.
 
 ## Scope
 
-Covers content under [docker/compose](../../docker/compose). Does not cover
-container runtime installation — see [docs/setup/docker.md](../setup/docker.md)
-and [docs/setup/podman.md](../setup/podman.md). Does not cover per-service
-port/volume reference — see [docs/setup/databases-services.md](../setup/databases-services.md).
+Covers the working Compose stack in `workstation-bootstrap/` (kv-backend
+services), and the planned general-purpose stacks under `docker/compose/`.
+Does not cover Docker Engine installation — that is handled by the Ansible
+`docker` role (see [ansible.md](./ansible.md)).
 
 ## Prerequisites
 
-- [docs/setup/docker.md](../setup/docker.md) completed.
-- [docs/architecture/networking.md](../architecture/networking.md) and
-  [docs/architecture/storage.md](../architecture/storage.md) read.
+- Docker is installed inside the VM (via Ansible `docker` role).
+- The developer VM is running: `cd vm && vagrant up`.
 
-## Planned Structure
+## Working Compose stack: kv-backend services
+
+The `workstation-bootstrap/` directory contains the working Compose
+configuration for the kv-backend local development environment. It is
+managed via the Makefile:
+
+```bash
+cd ~/dev-environment/workstation-bootstrap
+
+make kv-up          # docker compose up -d (builds WARs on first run)
+make kv-init        # first-time DB/Cassandra/Solr initialisation
+make kv-verify      # check all service ports are reachable
+make kv-status      # docker compose ps
+make kv-logs        # docker compose logs -f
+make kv-down        # docker compose down
+make kv-clean-slate # wipe volumes and rebuild from zero
+```
+
+Services started by `make kv-up`:
+
+| Service | Port | Technology |
+|---|---|---|
+| MySQL | 3306 | kv-backend relational DB |
+| RabbitMQ | 5672 / 15672 | Message broker + management UI |
+| Cassandra | 9042 | Time-series / wide-column data |
+| Solr | 8983 | Full-text search |
+| Memcached | 11211 | Session/cache store |
+| MailHog | 1025 / 8025 | Local mail catcher |
+| Tomcat/portal | 8080 | kv-backend portal (built from source) |
+
+## Design rules (applied to kv-backend stack and future stacks)
+
+- **Pinned image versions** — never `latest`. Versions are explicitly set
+  in the Compose file so upgrades are deliberate and reversible.
+- **Named volumes** for all stateful services — no bind-mounts for data
+  (bind-mounts are only used for config files).
+- **`:Z` SELinux labels** on bind-mounts for Fedora host compatibility.
+- **`127.0.0.1` port binding** — services are not exposed beyond the VM's
+  host interface by default.
+- **Healthchecks** on every stateful service — `docker compose ps` reflects
+  real readiness, not just container start.
+- **`.env` for credentials** — never hardcoded in the Compose file.
+  See [docs/security/secrets-management.md](../security/secrets-management.md).
+
+## Planned general-purpose stacks (Phase 3)
+
+Once implemented, general-purpose Compose stacks will live under
+`docker/compose/`:
 
 ```text
-docker/
-├── compose/
-│   ├── data-stack.yml       PostgreSQL, MySQL, MongoDB, Cassandra, Redis
-│   ├── messaging-stack.yml  RabbitMQ, Neo4j
-│   └── ai-stack.yml         Ollama, Open WebUI, Qdrant
-└── <service>/                Dockerfiles/config for services needing
-                                 customization beyond the official image.
+docker/compose/
+├── data-stack.yml       PostgreSQL, MySQL, MongoDB, Cassandra, Redis
+├── messaging-stack.yml  RabbitMQ, Neo4j
+└── ai-stack.yml         Ollama, Open WebUI, Qdrant
 ```
-Stacks are grouped by concern (data, messaging, AI) rather than one giant
-file, so individual stacks can be started/stopped independently.
 
-## Design Rules
-
-- Every service uses an official upstream image pinned to a specific
-  version tag (never `latest`), for reproducibility.
-- Every stateful service uses a named volume per
-  [docs/architecture/storage.md](../architecture/storage.md).
-- Credentials are injected via environment variables read from an untracked
-  `.env` file — see [docs/security/secrets-management.md](../security/secrets-management.md).
-- Ports are bound to `127.0.0.1` by default per
-  [docs/architecture/networking.md](../architecture/networking.md).
-- Every stack includes healthchecks so `docker compose ps` reflects real
-  service readiness, satisfying the "every installation has a verification
-  step" principle in [ARCHITECTURE.md](../../ARCHITECTURE.md).
+These will be independent of kv-backend and usable for any project.
+See [ROADMAP.md](../../ROADMAP.md) Phase 3 for status.
 
 ## References
 
 - [Compose file reference](https://docs.docker.com/reference/compose-file/)
+- [workstation-bootstrap/Makefile](../../workstation-bootstrap/Makefile)
 
 ## Related Documents
 
-- [docs/setup/databases-services.md](../setup/databases-services.md)
+- [docs/runbooks/service-lifecycle.md](../runbooks/service-lifecycle.md)
 - [docs/architecture/networking.md](../architecture/networking.md)
 - [docs/architecture/storage.md](../architecture/storage.md)
-- [docker/README.md](../../docker/README.md)
-- [docker/compose/README.md](../../docker/compose/README.md)
