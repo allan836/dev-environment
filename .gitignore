@@ -33,6 +33,9 @@ docker/**/volumes/
 # expects it to exist locally at this path but does not require it in git.
 assets/*.tar.gz
 
+# Provision state (written after VM boot for --resume; never commit)
+.provision-state
+
 # OS / editor cruft
 .DS_Store
 *.swp

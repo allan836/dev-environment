@@ -1,0 +1,8 @@
+---
+# Reload Docker daemon without restarting it.
+# SIGHUP causes dockerd to re-read daemon.json; running containers are unaffected.
+- name: Reload Docker daemon
+  ansible.builtin.systemd:
+    name: docker
+    state: reloaded
+  ignore_errors: true

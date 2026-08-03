@@ -166,43 +166,279 @@ ensure_multipass() {
 # =========================================================================== #
 
 # --------------------------------------------------------------------------- #
+# _configure_docker_for_libvirt_coexistence
+#
+# WHY THIS EXISTS
+# ───────────────
+# When Docker and libvirt both run on the same host, their nftables rules
+# collide in a way that silently breaks all guest VM internet access.
+#
+# The collision (confirmed by live packet-counter analysis):
+#   Docker installs an ip filter table via iptables-nft with a FORWARD chain
+#   that has policy DROP.  libvirt installs ip libvirt_network with a forward
+#   chain that ACCEPTs packets from virbr0.
+#
+#   In nftables, when multiple tables register base chains at the SAME hook
+#   and priority (both use hook forward, priority filter = 0), they execute
+#   in table handle-number order (lower handle = registered earlier = runs first).
+#   Docker's ip filter table (registered at boot, handle ~6) runs before
+#   libvirt_network (handle ~9, registered when virtnetworkd starts), so
+#   Docker's DROP policy fires first and terminates virbr0 packets before
+#   libvirt's ACCEPT rule is ever evaluated.
+#
+#   Symptom: guest can ping the gateway (192.168.122.1) — that is local
+#   bridge switching and never hits the FORWARD chain.  All routed packets
+#   requiring host NAT (TCP, ICMP to 8.8.8.8, etc.) are silently dropped.
+#   The libvirt guest_nat TCP masquerade counter stays at 0; only dnsmasq's
+#   own host-originated DNS lookups (UDP, OUTPUT not FORWARD) increment.
+#
+# THE FIX
+# ───────
+# Add ACCEPT rules to Docker's DOCKER-USER chain for all libvirt bridge
+# interfaces.  DOCKER-USER is the designed user-extension point for exactly
+# this use case — Docker explicitly documents and preserves it across daemon
+# restarts (it only flushes DOCKER, DOCKER-FORWARD, DOCKER-BRIDGE, DOCKER-CT).
+#
+# We install two rules per bridge:
+#   -I DOCKER-USER -i vibrX -j ACCEPT
+#       Allows forwarded packets FROM the guest to reach the internet.
+#   -I DOCKER-USER -o vibrX -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+#       Allows reply packets TO reach the guest.
+#
+# The rules are applied by a systemd oneshot service
+# (libvirt-docker-coexist.service) that starts after docker.service so the
+# DOCKER-USER chain already exists when the rules are inserted.
+#
+# WHY NOT daemon.json "iptables: false"
+# ─────────────────────────────────────
+# Tested and does not work on Docker 29 (Fedora package 1.fc44).  With
+# firewall-backend "iptables+firewalld", the daemon ignores "iptables: false"
+# and reinstates iptables:true in its loaded config.  Using
+# "firewall-backend": "nftables" creates a docker-bridges nftables table but
+# STILL creates an ip filter FORWARD chain (for the DOCKER-USER hook point).
+# The DROP policy remains regardless of backend choice.
+#
+# PORTABILITY
+# ───────────
+# Fedora:  iptables is iptables-nft (nf_tables backend). Docker creates
+#          ip filter FORWARD with DROP policy. This fix applies.
+# Ubuntu:  iptables is also iptables-nft on Ubuntu 20.10+. Same behaviour.
+# Debian:  iptables-nft since Debian 11. Same behaviour.
+# macOS:   Docker Desktop uses its own VM; DOCKER-USER is not exposed to the
+#          host. libvirt is not supported on macOS. No conflict possible.
+#
+# IDEMPOTENCY
+# ───────────
+# The systemd service uses iptables -C (check) before -I (insert).
+# Running provision.sh multiple times is safe.
+# --------------------------------------------------------------------------- #
+_configure_docker_for_libvirt_coexistence() {
+  local _script_dest="/usr/local/sbin/libvirt-docker-coexist.sh"
+  local _service_dest="/etc/systemd/system/libvirt-docker-coexist.service"
+
+  # ------------------------------------------------------------------ #
+  # 1. Write the coexistence script
+  # ------------------------------------------------------------------ #
+  info "Installing libvirt-Docker coexistence fix..."
+  info "  Target: ${_script_dest}"
+
+  sudo mkdir -p "$(dirname "${_script_dest}")"
+
+  sudo tee "${_script_dest}" > /dev/null << 'COEXIST_SCRIPT'
+#!/usr/bin/env bash
+# libvirt-docker-coexist.sh — managed by provision.sh; do not edit manually.
+# See lib/dependencies.sh:_configure_docker_for_libvirt_coexistence for docs.
+set -euo pipefail
+
+ACTION="${1:---apply}"
+
+_get_libvirt_bridges() {
+  local bridges=()
+  while IFS= read -r iface; do
+    bridges+=("${iface}")
+  done < <(ip link show type bridge 2>/dev/null \
+    | grep -oP '^\d+:\s+\K[^ :]+' \
+    | grep '^virbr' || true)
+  if command -v virsh &>/dev/null; then
+    while IFS= read -r bridge; do
+      [[ -n "${bridge}" ]] && bridges+=("${bridge}")
+    done < <(virsh -c qemu:///system net-list --all 2>/dev/null \
+      | awk 'NR>2 && $1 != "" {print $1}' \
+      | xargs -I{} virsh -c qemu:///system net-info {} 2>/dev/null \
+      | grep '^Bridge:' \
+      | awk '{print $2}' || true)
+  fi
+  printf '%s\n' "${bridges[@]}" | sort -u
+}
+
+_docker_user_exists() {
+  iptables -L DOCKER-USER -n &>/dev/null
+}
+
+_add_rules_for_bridge() {
+  local bridge="$1"
+  if ! iptables -C DOCKER-USER -i "${bridge}" -j ACCEPT &>/dev/null; then
+    iptables -I DOCKER-USER 1 -i "${bridge}" -j ACCEPT
+    echo "Added: DOCKER-USER ACCEPT -i ${bridge}"
+  else
+    echo "Already present: DOCKER-USER ACCEPT -i ${bridge}"
+  fi
+  if ! iptables -C DOCKER-USER -o "${bridge}" -m conntrack \
+      --ctstate ESTABLISHED,RELATED -j ACCEPT &>/dev/null; then
+    iptables -I DOCKER-USER 2 -o "${bridge}" -m conntrack \
+      --ctstate ESTABLISHED,RELATED -j ACCEPT
+    echo "Added: DOCKER-USER ACCEPT -o ${bridge} ESTABLISHED,RELATED"
+  else
+    echo "Already present: DOCKER-USER ACCEPT -o ${bridge} ESTABLISHED,RELATED"
+  fi
+}
+
+_remove_rules_for_bridge() {
+  local bridge="$1"
+  iptables -D DOCKER-USER -i "${bridge}" -j ACCEPT &>/dev/null && \
+    echo "Removed: DOCKER-USER ACCEPT -i ${bridge}" || true
+  iptables -D DOCKER-USER -o "${bridge}" -m conntrack \
+    --ctstate ESTABLISHED,RELATED -j ACCEPT &>/dev/null && \
+    echo "Removed: DOCKER-USER ACCEPT -o ${bridge} ESTABLISHED,RELATED" || true
+}
+
+main() {
+  if ! _docker_user_exists; then
+    echo "DOCKER-USER chain not found — Docker not running or uses a different backend."
+    echo "No rules added. Re-run after Docker starts."
+    exit 0
+  fi
+  local bridges
+  mapfile -t bridges < <(_get_libvirt_bridges)
+  if [[ ${#bridges[@]} -eq 0 ]]; then
+    echo "No libvirt bridge interfaces found. No rules added."
+    exit 0
+  fi
+  case "${ACTION}" in
+    --apply)
+      echo "Applying libvirt-docker coexistence rules for: ${bridges[*]}"
+      for bridge in "${bridges[@]}"; do _add_rules_for_bridge "${bridge}"; done
+      echo "Done."
+      ;;
+    --remove)
+      echo "Removing libvirt-docker coexistence rules for: ${bridges[*]}"
+      for bridge in "${bridges[@]}"; do _remove_rules_for_bridge "${bridge}"; done
+      echo "Done."
+      ;;
+    *) echo "Usage: $0 [--apply|--remove]" >&2; exit 1 ;;
+  esac
+}
+main
+COEXIST_SCRIPT
+
+  sudo chmod 0755 "${_script_dest}"
+  printf 'Wrote coexistence script: %s\n' "${_script_dest}" >> "${LOG_FILE}"
+
+  # ------------------------------------------------------------------ #
+  # 2. Write the systemd service unit
+  # ------------------------------------------------------------------ #
+  sudo tee "${_service_dest}" > /dev/null << 'COEXIST_SERVICE'
+[Unit]
+Description=Allow libvirt guest forwarding through Docker FORWARD chain
+Documentation=https://docs.docker.com/network/packet-filtering-firewalls/
+After=docker.service network.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/libvirt-docker-coexist.sh --apply
+ExecStop=/usr/local/sbin/libvirt-docker-coexist.sh --remove
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target
+COEXIST_SERVICE
+
+  printf 'Wrote coexistence service: %s\n' "${_service_dest}" >> "${LOG_FILE}"
+
+  # ------------------------------------------------------------------ #
+  # 3. Enable and start the service
+  # ------------------------------------------------------------------ #
+  sudo systemctl daemon-reload 2>>"${LOG_FILE}" || true
+  sudo systemctl enable libvirt-docker-coexist.service 2>>"${LOG_FILE}" || true
+
+  # Start immediately if Docker is already running
+  if systemctl is-active docker &>/dev/null; then
+    local svc_rc=0
+    sudo systemctl restart libvirt-docker-coexist.service 2>>"${LOG_FILE}" || svc_rc=$?
+    if [[ ${svc_rc} -eq 0 ]]; then
+      success "libvirt-Docker coexistence fix applied (DOCKER-USER rules added)."
+    else
+      warn "libvirt-docker-coexist.service start failed — check: journalctl -u libvirt-docker-coexist"
+    fi
+  else
+    info "Docker not running — coexistence rules will be applied on next boot/Docker start."
+    success "libvirt-Docker coexistence service installed and enabled."
+  fi
+}
+
+# --------------------------------------------------------------------------- #
 # ensure_libvirt
-# Installs KVM/libvirt and supporting tools (cloud-image-utils, virt-install).
+# Installs KVM/libvirt and all required supporting tools.
+# Required tools:
+#   virsh, virt-install, virt-host-validate  — libvirt management
+#   qemu-img                                  — disk image creation
+#   cloud-localds / genisoimage / xorriso     — cloud-init ISO creation
 # --------------------------------------------------------------------------- #
 ensure_libvirt() {
-  if has virsh && has virt-install; then
+  local _need_install=false
+  for t in virsh virt-install qemu-img; do
+    has "${t}" || _need_install=true
+  done
+
+  if [[ "${_need_install}" == "false" ]]; then
     success "KVM/libvirt already installed."
+    # Still run the Docker coexistence fix on every invocation — it is idempotent
+    # and must be applied even when libvirt was installed in a previous run but
+    # Docker was installed later.
+    _configure_docker_for_libvirt_coexistence
     return 0
   fi
 
-  info "Installing KVM/libvirt..."
+  info "Installing KVM/libvirt and tools..."
 
   case "$PKG_MANAGER" in
     apt)
       sudo apt-get update -qq 2>>"$LOG_FILE"
       sudo apt-get install -y \
         qemu-kvm libvirt-daemon-system libvirt-clients \
-        virt-install cloud-image-utils genisoimage \
-        bridge-utils cpu-checker 2>&1 | tee -a "$LOG_FILE"
+        virt-install virt-manager libvirt-dev \
+        cloud-image-utils genisoimage xorriso \
+        bridge-utils cpu-checker \
+        2>>"$LOG_FILE"
       ;;
     dnf)
-      sudo dnf install -y @virtualization \
-        virt-install cloud-utils genisoimage 2>&1 | tee -a "$LOG_FILE"
+      sudo dnf install -y \
+        @virtualization \
+        virt-install virt-manager \
+        cloud-utils genisoimage xorriso \
+        2>>"$LOG_FILE"
       ;;
     *)
       die "Cannot auto-install libvirt on '${HOST_OS}'. Install qemu-kvm, libvirt, virt-install manually."
       ;;
   esac
 
-  sudo systemctl enable --now libvirtd 2>>"$LOG_FILE" || true
+  # Enable the system daemon (not the session daemon).
+  sudo systemctl enable --now libvirtd  2>>"$LOG_FILE" || \
+    sudo systemctl enable --now virtqemud 2>>"$LOG_FILE" || true
+
   sudo usermod -aG libvirt,kvm "${USER}" 2>/dev/null || true
 
-  has virsh || die "libvirt installation failed. Check ${LOG_FILE}."
+  has virsh || die "libvirt installation failed (virsh not found). Check ${LOG_FILE}."
   success "KVM/libvirt installed."
 
-  # Group membership (libvirt, kvm) only takes effect after a new login session.
-  # A reboot is the most reliable way to ensure KVM modules are also fully loaded.
-  _prompt_reboot "KVM/libvirt was just installed. A reboot is needed so that kernel modules load and your user gains libvirt/kvm group access."
+  # Fix Docker/libvirt nftables FORWARD chain conflict before any VM boots.
+  _configure_docker_for_libvirt_coexistence
+
+  # Group membership and KVM modules only take effect after a new session.
+  _prompt_reboot "KVM/libvirt was just installed. A reboot is required so kernel modules load and your user gains libvirt/kvm group access."
 }
 
 # =========================================================================== #

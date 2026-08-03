@@ -67,6 +67,18 @@ has() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# timeline_item DONE MSG — prints one line of the boot timeline.
+# DONE: "true"  → green ✓ (completed)
+#       anything else → space (pending)
+timeline_item() {
+  local done="$1"; shift
+  if [[ "${done}" == "true" ]]; then
+    echo -e "  [${_GREEN}✓${_RESET}] $*"
+  else
+    echo -e "  [ ] $*"
+  fi
+}
+
 # _prompt_reboot REASON
 # Tells the user why a reboot is needed, asks to confirm, and either
 # reboots (printing resume instructions first) or exits cleanly so the

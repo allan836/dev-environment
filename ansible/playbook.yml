@@ -6,8 +6,10 @@
 # Versions and configuration live in group_vars/all/versions.yml.
 #
 # Usage (run by provision.sh automatically, or manually):
-#   ansible-playbook playbook.yml -i inventory/hosts.yml \
-#     --extra-vars "dev_user=ubuntu"
+#   ansible-playbook playbook.yml -i inventory/hosts.yml
+#
+# dev_user defaults to "ubuntu" — the Ubuntu cloud image's default user.
+# The host username must never be substituted here.
 #
 # Run specific roles only:
 #   ansible-playbook playbook.yml -i inventory/hosts.yml --tags java,tomcat

@@ -7,8 +7,8 @@
 #
 # Requires:
 #   lib/log.sh, lib/vm.sh sourced (for vm_exec, vm_sync_repo)
-#   VM_IP, VM_SSH_USER, VM_SSH_KEY, VM_SSH_PORT, SKIP_ANSIBLE,
-#   ANSIBLE_DIR, DEV_USER, LOG_FILE exported
+#   VM_IP, VM_SSH_USER, VM_SSH_KEY, VM_SSH_PORT, VM_USER, SKIP_ANSIBLE,
+#   ANSIBLE_DIR, LOG_FILE exported
 # =============================================================================
 
 # --------------------------------------------------------------------------- #
@@ -75,13 +75,15 @@ run_ansible() {
   local inventory="${VM_SSH_USER}@${VM_IP},"
   local ssh_args; ssh_args="$(_build_ssh_args)"
 
+  # dev_user is the VM-side user that owns the developer toolchain.
+  # VM_USER is always "ubuntu" — it is never derived from the host environment.
   ANSIBLE_HOST_KEY_CHECKING=False \
   ansible-playbook \
     -i "${inventory}" \
     --private-key "${VM_SSH_KEY}" \
     --user "${VM_SSH_USER}" \
     --ssh-extra-args "${ssh_args}" \
-    --extra-vars "dev_user=${DEV_USER}" \
+    --extra-vars "dev_user=${VM_USER}" \
     "${ANSIBLE_DIR}/playbook.yml" \
     2>&1 | tee -a "$LOG_FILE"
 
@@ -92,7 +94,7 @@ run_ansible() {
     error "  To retry:"
     error "    ansible-playbook -i '${VM_SSH_USER}@${VM_IP},' \\"
     error "      --private-key ${VM_SSH_KEY} \\"
-    error "      --extra-vars 'dev_user=${DEV_USER}' \\"
+    error "      --extra-vars 'dev_user=${VM_USER}' \\"
     error "      ${ANSIBLE_DIR}/playbook.yml"
     return 1
   fi

@@ -70,20 +70,29 @@ _probe_multipass() {
 # _probe_libvirt
 # Returns 0 if KVM/libvirt is installed or installable on this Linux host.
 # Returns 1 on macOS (not supported) or missing hardware virtualisation.
+#
+# KVM detection is architecture-aware:
+#   x86_64  — checks /proc/cpuinfo for vmx (Intel VT-x) or svm (AMD-V)
+#   aarch64 — ARM does not expose vmx/svm; accept the host unconditionally
+#             (/dev/kvm presence is verified later by _libvirt_validate_host)
 # --------------------------------------------------------------------------- #
 _probe_libvirt() {
   [[ "$HOST_OS" == "mac" ]] && return 1
 
-  # Require hardware virtualisation support
-  if [[ -f /proc/cpuinfo ]]; then
-    grep -qE '(vmx|svm)' /proc/cpuinfo || return 1
-  fi
+  case "${HOST_ARCH:-}" in
+    arm64)
+      ;;
+    *)
+      if [[ -f /proc/cpuinfo ]]; then
+        grep -qE '(vmx|svm)' /proc/cpuinfo || return 1
+      fi
+      ;;
+  esac
 
   if has virsh; then
     return 0
   fi
 
-  # libvirt is installable via dnf / apt on Linux
   case "$HOST_OS" in
     ubuntu|debian|fedora|rhel|linux_generic) return 0 ;;
     *) return 1 ;;
