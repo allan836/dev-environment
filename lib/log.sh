@@ -66,3 +66,36 @@ die() {
 has() {
   command -v "$1" >/dev/null 2>&1
 }
+
+# _prompt_reboot REASON
+# Tells the user why a reboot is needed, asks to confirm, and either
+# reboots (printing resume instructions first) or exits cleanly so the
+# user can reboot manually before re-running ./provision.sh.
+_prompt_reboot() {
+  local reason="${1:-A newly installed component requires a reboot to take effect.}"
+  local resume_cmd="cd ${REPO_ROOT:-$(pwd)} && ./provision.sh"
+
+  echo ""
+  echo -e "${_YELLOW}${_BOLD}  ⚠  Reboot required${_RESET}"
+  echo -e "${_YELLOW}  Reason : ${reason}${_RESET}"
+  echo ""
+  echo -e "${_BOLD}  After the reboot, resume provisioning with:${_RESET}"
+  echo -e "    ${_CYAN}${resume_cmd}${_RESET}"
+  echo ""
+  read -rp "  Reboot now? [y/N]: " _reboot_answer
+  echo ""
+
+  case "${_reboot_answer,,}" in
+    y|yes)
+      echo -e "${_BOLD}  Rebooting in 5 seconds … (Ctrl-C to cancel)${_RESET}"
+      echo -e "  After reboot, run:  ${_CYAN}${resume_cmd}${_RESET}"
+      sleep 5
+      sudo reboot
+      ;;
+    *)
+      warn "Reboot skipped. Please reboot manually, then run:"
+      warn "  ${resume_cmd}"
+      exit 0
+      ;;
+  esac
+}

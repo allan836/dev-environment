@@ -173,8 +173,9 @@ detect_providers() {
 
 # --------------------------------------------------------------------------- #
 # select_provider
-# Picks the first available provider (priority order).
-# If none detected, defaults to multipass (will be auto-installed).
+# Prefers already-installed providers (fewest additional deps) over those that
+# only qualify as "installable".  Falls back to priority order when nothing is
+# installed yet.  If no provider was detected at all, defaults to multipass.
 # --------------------------------------------------------------------------- #
 select_provider() {
   if [[ ${#AVAILABLE_PROVIDERS[@]} -eq 0 ]]; then
@@ -184,7 +185,23 @@ select_provider() {
     return 0
   fi
 
-  SELECTED_PROVIDER="${AVAILABLE_PROVIDERS[0]}"
+  # Collect providers that are fully installed (binary present on PATH).
+  # Order mirrors AVAILABLE_PROVIDERS, which already respects PROVIDER_PRIORITY.
+  local installed_providers=()
+  for p in "${AVAILABLE_PROVIDERS[@]}"; do
+    case "$p" in
+      multipass) has multipass && installed_providers+=("$p") ;;
+      libvirt)   has virsh     && installed_providers+=("$p") ;;
+      incus)     has incus     && installed_providers+=("$p") ;;
+    esac
+  done
+
+  if [[ ${#installed_providers[@]} -gt 0 ]]; then
+    SELECTED_PROVIDER="${installed_providers[0]}"
+  else
+    SELECTED_PROVIDER="${AVAILABLE_PROVIDERS[0]}"
+  fi
+
   export SELECTED_PROVIDER
   info "Selected provider: ${_BOLD}${SELECTED_PROVIDER}${_RESET}"
 }

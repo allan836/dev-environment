@@ -142,6 +142,15 @@ main() {
   step 1 7 "Detecting host OS"
   detect_host_os
 
+  # On Fedora/RHEL, libvirt is the native path and requires the fewest
+  # additional dependencies (dnf install @virtualization vs. snap + multipass).
+  # Reorder the priority unless the caller forced a provider explicitly.
+  if [[ -z "${FORCE_PROVIDER}" ]]; then
+    case "$HOST_OS" in
+      fedora|rhel) PROVIDER_PRIORITY=("libvirt" "multipass" "incus") ;;
+    esac
+  fi
+
   step 2 7 "Detecting virtualization providers"
   detect_providers
 

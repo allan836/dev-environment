@@ -80,11 +80,21 @@ _install_multipass_linux() {
       ;;
     dnf)
       info "Installing Multipass via snap (snap is the canonical path on Fedora/RHEL)..."
+      local _snapd_freshly_installed=false
       if ! has snap; then
         sudo dnf install -y snapd 2>>"$LOG_FILE" || true
         sudo systemctl enable --now snapd.socket 2>>"$LOG_FILE" || true
         sudo ln -sf /var/lib/snapd/snap /snap 2>/dev/null || true
-        sleep 5
+        _snapd_freshly_installed=true
+      fi
+      # Verify snap daemon is responsive; on Fedora a fresh snapd install
+      # requires a reboot for SELinux policy and the socket to fully initialize.
+      if ! snap list &>/dev/null; then
+        if [[ "$_snapd_freshly_installed" == "true" ]]; then
+          _prompt_reboot "snapd was just installed on Fedora/RHEL and requires a reboot before snap packages can be used."
+        else
+          warn "snap daemon is not responding. A reboot may be needed."
+        fi
       fi
       while IFS= read -r channel; do
         info "  Trying snap channel: ${channel}"
@@ -189,6 +199,10 @@ ensure_libvirt() {
 
   has virsh || die "libvirt installation failed. Check ${LOG_FILE}."
   success "KVM/libvirt installed."
+
+  # Group membership (libvirt, kvm) only takes effect after a new login session.
+  # A reboot is the most reliable way to ensure KVM modules are also fully loaded.
+  _prompt_reboot "KVM/libvirt was just installed. A reboot is needed so that kernel modules load and your user gains libvirt/kvm group access."
 }
 
 # =========================================================================== #
@@ -248,6 +262,9 @@ ensure_incus() {
 
   has incus || die "Incus installation failed. Check ${LOG_FILE}."
   success "Incus installed."
+
+  # The incus group is added during install; membership requires a new session.
+  _prompt_reboot "Incus was just installed. A reboot is needed so your user gains incus group access."
 }
 
 # =========================================================================== #
