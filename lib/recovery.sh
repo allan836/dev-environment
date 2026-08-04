@@ -530,7 +530,7 @@ ssh_recovery() {
       export RECOVERY_METHOD
       return 0
     fi
-    warn "SSH still not available after automatic recovery — switching to manual guidance."
+    warn "SSH still not available after automatic recovery — restarting clean."
     RECOVERY_METHOD="manual"
     export RECOVERY_METHOD
   else
@@ -538,38 +538,34 @@ ssh_recovery() {
     export RECOVERY_METHOD
   fi
 
-  # ─── Manual recovery path ─────────────────────────────────────────── #
+  # ─── Auto-restart path ────────────────────────────────────────────── #
+  # Automatic injection failed (or SSH did not recover after injection).
+  # Rather than leaving the user staring at a 20-minute manual-wait prompt,
+  # print the diagnostic steps for information and then destroy the broken VM
+  # and start a completely fresh provision run automatically.
   echo ""
-  echo -e "${_RED}${_BOLD}"
+  echo -e "${_YELLOW}${_BOLD}"
   echo "  ╔══════════════════════════════════════════════════════╗"
   echo "  ║                                                      ║"
-  echo "  ║   MANUAL RECOVERY REQUIRED                           ║"
+  echo "  ║   SSH recovery failed — restarting clean             ║"
   echo "  ║                                                      ║"
-  echo "  ║   Automatic injection could not restore SSH access.  ║"
-  echo "  ║   Follow the steps below to recover the VM.          ║"
+  echo "  ║   The VM could not be recovered automatically.       ║"
+  echo "  ║   Destroying the broken VM and starting fresh.       ║"
   echo "  ║                                                      ║"
   echo "  ╚══════════════════════════════════════════════════════╝"
   echo -e "${_RESET}"
 
+  # Print diagnostics so the user has context in the log.
   _recovery_print_console_access
   _recovery_print_diagnostic_commands
 
-  info "Waiting up to $((  _RECOVERY_MANUAL_TIMEOUT / 60 )) minutes for SSH to become available..."
-  info "(Fix the VM, repair SSH access, then provisioning will resume automatically.)"
+  warn "Diagnostic information printed above (also saved to ${LOG_FILE})."
+  warn "Automatically restarting with: ./provision.sh"
   echo ""
+  sleep 3
 
-  if _recovery_wait_for_ssh_retry "${_RECOVERY_MANUAL_TIMEOUT}"; then
-    success "SSH is now available — resuming provisioning."
-    return 0
-  fi
-
-  error "SSH did not become available after $((  _RECOVERY_MANUAL_TIMEOUT / 60 )) minutes."
-  error ""
-  error "Once you have repaired SSH access inside the VM, resume with:"
-  error ""
-  error "    ./provision.sh --resume"
-  error ""
-  die "Provisioning stopped: SSH authentication could not be established."
+  # exec replaces this process — no subprocess nesting, clean restart.
+  exec "${REPO_ROOT}/provision.sh"
 }
 
 # --------------------------------------------------------------------------- #

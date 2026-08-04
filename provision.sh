@@ -98,6 +98,7 @@ export VM_NAME VM_CPU VM_RAM VM_DISK_GB VM_USER SKIP_ANSIBLE DEV_MODE RESUME
 export ANSIBLE_DIR LOG_FILE REPO_ROOT DEBUG
 export PROVIDER_PRIORITY ACTIVE_PROVIDER SELECTED_PROVIDER AVAILABLE_PROVIDERS
 export UBUNTU_CLOUD_IMAGE_URL UBUNTU_CLOUD_IMAGE_URL_ARM
+export KV_BACKEND_REPO KV_BACKEND_TARBALL_URL
 
 # --------------------------------------------------------------------------- #
 # Argument parsing
@@ -323,12 +324,18 @@ main() {
   echo -e "  [ ] Provisioning with Ansible (starting now)"
   echo ""
 
-  step 6 7 "SSH key setup"
+  step 6 7 "GitHub SSH key setup"
   setup_ssh_key
+
+  # Clone kv-backend and download the Docker image tarball immediately after
+  # the GitHub connection is confirmed — before Ansible runs, so the
+  # kv_backend Ansible role finds the repo already in place and the tarball
+  # is ready for 'docker load'.
+  clone_kv_backend
+  download_kv_assets
 
   step 7 7 "Provisioning VM"
   run_ansible
-  clone_kv_backend
   start_kv_services
 
   run_verify

@@ -24,18 +24,6 @@
 # first provision and produce a confusing ignored error.  The clone step in
 # lib/ansible_runner.sh:clone_kv_backend() runs after Ansible completes.
 
-# ---- Link the dev-environment repo into the expected workspace path --------
-
-- name: Create symlink for dev-environment repo in workspace
-  ansible.builtin.file:
-    src: "{{ dev_home }}/dev-environment"
-    dest: "{{ dev_home }}/workspace/repos/dev-environment"
-    state: link
-    force: true
-  become: false
-  become_user: "{{ dev_user }}"
-  ignore_errors: true
-
 # ---- Load pre-built Docker images from asset tarball -----------------------
 
 - name: Check if preload Docker images tarball exists

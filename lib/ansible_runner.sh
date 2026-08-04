@@ -104,36 +104,96 @@ run_ansible() {
 
 # --------------------------------------------------------------------------- #
 # clone_kv_backend
-# Clones the kv-backend repo inside the VM via SSH.
-# Called after setup_ssh_key() has already verified the GitHub connection,
-# so a failure here is a genuine problem (wrong repo, permissions, etc.).
+# Clones the kv-backend repo into ~/workspace/repos/kv-backend inside the VM.
+# Called immediately after setup_ssh_key() has verified the GitHub connection.
+# KV_BACKEND_REPO is set in config.env.
 # --------------------------------------------------------------------------- #
 clone_kv_backend() {
   banner "Cloning kv-backend"
 
-  local clone_out clone_rc
+  local repo="${KV_BACKEND_REPO:-git@github.com:Klantenvertellen-NextGen/kv-backend.git}"
+  local kv_dir='$HOME/workspace/repos/kv-backend'
+
+  info "Repository: ${repo}"
+  info "Destination (inside VM): ~/workspace/repos/kv-backend"
+
+  local clone_out clone_rc=0
   clone_out="$(vm_exec "
-    KV_DIR=\$HOME/workspace/repos/kv-backend
+    set -euo pipefail
+    KV_DIR=${kv_dir}
     if [[ -d \"\$KV_DIR/.git\" ]]; then
       echo 'kv-backend already cloned — skipping.'
       exit 0
     fi
     mkdir -p \"\$(dirname \"\$KV_DIR\")\"
-    git clone \
-      -o StrictHostKeyChecking=accept-new \
-      git@github.com:knowledgevault/kv-backend.git \"\$KV_DIR\" 2>&1 \
-    && echo 'kv-backend cloned successfully.'
+    GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' \
+      git clone ${repo} \"\$KV_DIR\" 2>&1
+    echo 'kv-backend cloned successfully.'
   " 2>&1)" || clone_rc=$?
-  clone_rc="${clone_rc:-0}"
 
   echo "${clone_out}" | tee -a "$LOG_FILE"
 
   if [[ ${clone_rc} -ne 0 ]]; then
     error "kv-backend clone failed (exit ${clone_rc})."
-    error "The GitHub SSH key was verified, so this may be a repository permission issue."
+    error "The GitHub SSH key was verified — this is likely a repository permission issue."
+    error "Check that your GitHub account has access to: ${repo}"
     error "To retry inside the VM:"
     error "  ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
-    error "  git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend"
+    error "  git clone ${repo} ~/workspace/repos/kv-backend"
+    return 1
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# download_kv_assets
+# Downloads the pre-built Docker image tarball into the VM so that
+# 'make kv-up' does not have to pull all images from Docker Hub on first run.
+#
+# The tarball is placed at ~/dev-environment/assets/preload_kv.tar.gz, which
+# is where the kv_backend Ansible role's Docker load task looks for it.
+#
+# Skips silently if KV_BACKEND_TARBALL_URL is empty.
+# --------------------------------------------------------------------------- #
+download_kv_assets() {
+  if [[ -z "${KV_BACKEND_TARBALL_URL:-}" ]]; then
+    info "KV_BACKEND_TARBALL_URL not set — skipping Docker image tarball download."
+    return 0
+  fi
+
+  banner "Downloading kv-backend Docker image tarball"
+  info "URL: ${KV_BACKEND_TARBALL_URL}"
+  info "Destination (inside VM): ~/dev-environment/assets/preload_kv.tar.gz"
+
+  local dl_out dl_rc=0
+  dl_out="$(vm_exec "
+    set -euo pipefail
+    DEST=\$HOME/dev-environment/assets/preload_kv.tar.gz
+    if [[ -f \"\$DEST\" ]]; then
+      echo 'Tarball already present — skipping download.'
+      exit 0
+    fi
+    mkdir -p \"\$(dirname \"\$DEST\")\"
+    echo 'Downloading tarball (this may take a few minutes)...'
+    # Google Drive large-file download: the first request returns a cookie-gated
+    # confirmation page; follow it with the confirm token to get the real file.
+    COOKIEJAR=\$(mktemp /tmp/gdrive-cookies-XXXXXX)
+    curl -fsSL --max-time 30 \
+      --cookie-jar \"\$COOKIEJAR\" \
+      '${KV_BACKEND_TARBALL_URL}' -o /dev/null
+    curl -fL --progress-bar --max-time 1800 \
+      --cookie \"\$COOKIEJAR\" \
+      '${KV_BACKEND_TARBALL_URL}' -o \"\$DEST\"
+    rm -f \"\$COOKIEJAR\"
+    echo 'Tarball downloaded: '\$(du -sh \"\$DEST\" | cut -f1)
+  " 2>&1)" || dl_rc=$?
+
+  echo "${dl_out}" | tee -a "$LOG_FILE"
+
+  if [[ ${dl_rc} -ne 0 ]]; then
+    warn "Tarball download failed (exit ${dl_rc}) — Docker images will be pulled from Hub on first kv-up."
+    warn "To retry: ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
+    warn "  curl -fL '${KV_BACKEND_TARBALL_URL}' -o ~/dev-environment/assets/preload_kv.tar.gz"
+    return 0
   fi
 }
 
