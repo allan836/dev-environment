@@ -58,9 +58,18 @@ echo ""
 echo -e "${_BOLD}==> Core tools${_RESET}"
 check_cmd "Git"       git
 check_cmd "Docker"    docker
-check_cmd "Ansible"   ansible
+# Ansible runs on the HOST (not in the VM) — skip inside-VM check.
+skip "Ansible (host-side tool — not installed in VM)"
 check_cmd "Terraform" terraform
-check_cmd "kubectl"   kubectl
+# kubectl uses --client flag for version, not --version
+if command -v kubectl >/dev/null 2>&1; then
+  ver="$(kubectl version --client --output=json 2>/dev/null \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('clientVersion',{}).get('gitVersion','unknown'))" \
+    2>/dev/null || kubectl version --client 2>&1 | head -n1)"
+  ok "kubectl: ${ver}"
+else
+  fail "kubectl — not found (command: kubectl)"
+fi
 
 echo ""
 echo -e "${_BOLD}==> Language runtimes${_RESET}"
@@ -140,10 +149,9 @@ if [[ ${#FAILURES[@]} -gt 0 ]]; then
     echo -e "  ${_RED}✘${_RESET}  ${f}"
   done
   echo ""
-  echo "Re-run ./provision.sh to attempt repair, or run Ansible manually:"
-  echo "  cd vm && vagrant ssh"
-  echo "  cd ~/dev-environment/ansible"
-  echo "  ansible-playbook playbook.yml -i inventory/hosts.yml"
+  echo "Re-run ./provision.sh to attempt repair, or run Ansible manually from the host:"
+  echo "  ansible-playbook -i 'ubuntu@<VM_IP>,' --private-key ~/.ssh/dev-env \\"
+  echo "    --extra-vars 'dev_user=ubuntu' ansible/playbook.yml"
   exit 1
 fi
 

@@ -17,36 +17,12 @@
     mode: "0755"
   become: true
 
-# ---- Clone kv-backend repo -------------------------------------------------
-# This will fail silently if the SSH key has not been added to GitHub yet.
-# provision.sh handles the SSH key prompt BEFORE Ansible runs, so by the time
-# this task executes the key should already be in GitHub.
-
-- name: Clone kv-backend repository
-  ansible.builtin.git:
-    repo: "git@github.com:knowledgevault/kv-backend.git"
-    dest: "{{ dev_home }}/workspace/repos/kv-backend"
-    version: main
-    accept_hostkey: true
-    update: false
-  become: false
-  become_user: "{{ dev_user }}"
-  environment:
-    HOME: "{{ dev_home }}"
-    GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=accept-new"
-  ignore_errors: true
-  register: kv_clone
-
-- name: Warn if kv-backend clone failed
-  ansible.builtin.debug:
-    msg: |
-      WARNING: kv-backend could not be cloned.
-      This usually means the SSH key has not been added to GitHub.
-      To fix after provisioning:
-        vagrant ssh
-        cat ~/.ssh/id_ed25519.pub   # add this to GitHub SSH keys
-        git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend
-  when: kv_clone is failed or kv_clone.changed == false and kv_clone.failed is defined
+# ---- kv-backend repo clone -------------------------------------------------
+# Cloning is handled by provision.sh AFTER the guided GitHub SSH setup
+# (setup_ssh_key in lib/vm.sh) has verified that git@github.com is reachable.
+# Doing it here — before the connection is confirmed — would always fail on a
+# first provision and produce a confusing ignored error.  The clone step in
+# lib/ansible_runner.sh:clone_kv_backend() runs after Ansible completes.
 
 # ---- Link the dev-environment repo into the expected workspace path --------
 
@@ -109,7 +85,8 @@
   ansible.builtin.debug:
     msg:
       - "kv-backend role complete."
-      - "Next steps inside the VM (vagrant ssh):"
+      - "Next steps inside the VM:"
+      - "  ssh -i ~/.ssh/dev-env ubuntu@<VM_IP>"
       - "  cd ~/dev-environment/workstation-bootstrap"
       - "  make kv-up      # start MySQL, Cassandra, Solr, RabbitMQ, Memcached, Tomcat"
       - "  make kv-init    # first-time DB init (run once)"

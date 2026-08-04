@@ -357,29 +357,96 @@ wait_for_cloud_init() {
 
 # --------------------------------------------------------------------------- #
 # setup_ssh_key
-# Generates an ed25519 SSH key INSIDE the VM for GitHub access.
-# Displays the public key; this is the only manual step.
+# Guided GitHub SSH key setup — the one manual step in provisioning.
+#
+# Flow:
+#   1. Generate an ed25519 key inside the VM (skipped if already present).
+#   2. Display the public key and step-by-step instructions to add it to GitHub.
+#   3. Test the GitHub SSH connection inside the VM in a loop until it succeeds.
+#   4. Only return when git@github.com is reachable — or the user explicitly
+#      skips so kv-backend clone and kv-up can succeed.
 # --------------------------------------------------------------------------- #
 setup_ssh_key() {
-  banner "SSH Key Setup"
-  info "Generating GitHub SSH key inside VM (skipped if already present)..."
+  banner "GitHub SSH Key Setup"
 
+  # ── Step 1: generate key inside VM ──────────────────────────────────── #
+  info "Generating GitHub SSH key inside VM (skipped if already present)..."
   vm_exec "
     if [[ ! -f ~/.ssh/id_ed25519 ]]; then
       mkdir -p ~/.ssh && chmod 700 ~/.ssh
       ssh-keygen -t ed25519 -C '$(whoami)@dev-env' -N '' -f ~/.ssh/id_ed25519
     fi
-    echo ''
-    echo '============================================================'
-    echo '  ACTION REQUIRED: Add the following public key to GitHub'
-    echo '  Settings → SSH and GPG keys → New SSH key'
-    echo '============================================================'
-    cat ~/.ssh/id_ed25519.pub
-    echo '============================================================'
-  "
+  " 2>/dev/null
+
+  # ── Step 2: fetch the public key to display on the host terminal ─────── #
+  local pub_key
+  pub_key="$(vm_exec "cat ~/.ssh/id_ed25519.pub" 2>/dev/null || true)"
+
+  if [[ -z "${pub_key}" ]]; then
+    warn "Could not retrieve SSH public key from VM — skipping GitHub setup."
+    return 0
+  fi
 
   echo ""
-  warn "This is the only manual step — GitHub requires you to authenticate."
-  warn "Once the key is added to your GitHub account:"
-  read -rp "  Press Enter to continue... "
+  echo -e "${_BOLD}${_CYAN}  ┌─────────────────────────────────────────────────────────┐${_RESET}"
+  echo -e "${_BOLD}${_CYAN}  │         ACTION REQUIRED — GitHub SSH Key Setup          │${_RESET}"
+  echo -e "${_BOLD}${_CYAN}  └─────────────────────────────────────────────────────────┘${_RESET}"
+  echo ""
+  echo -e "${_BOLD}  Step 1:${_RESET} Copy the public key below:"
+  echo ""
+  echo -e "  ${_YELLOW}${pub_key}${_RESET}"
+  echo ""
+  echo -e "${_BOLD}  Step 2:${_RESET} Open GitHub in your browser:"
+  echo -e "          ${_CYAN}https://github.com/settings/ssh/new${_RESET}"
+  echo ""
+  echo -e "${_BOLD}  Step 3:${_RESET} Paste the key, give it a title (e.g. dev-env), and click"
+  echo -e "          ${_BOLD}Add SSH key${_RESET}."
+  echo ""
+
+  # ── Step 3: test loop — only proceed when connection is confirmed ─────── #
+  local attempt=0
+  while true; do
+    attempt=$(( attempt + 1 ))
+
+    read -rp "  Press Enter to test the GitHub connection (or type 'skip' to continue without it): " _answer
+    if [[ "${_answer,,}" == "skip" ]]; then
+      warn "GitHub connection skipped."
+      warn "kv-backend will not be cloned automatically."
+      warn "To clone later, SSH into the VM and run:"
+      warn "  git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend"
+      echo ""
+      return 0
+    fi
+
+    echo ""
+    info "Testing GitHub SSH connection inside VM (attempt ${attempt})..."
+
+    local gh_out gh_rc
+    gh_out="$(vm_exec "ssh -T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 git@github.com 2>&1" || true)"
+    gh_rc=$?
+
+    # GitHub always exits 1 on success ("Hi <user>! You've successfully authenticated…")
+    # but exits with a different message on failure.
+    if echo "${gh_out}" | grep -q "successfully authenticated"; then
+      local gh_user
+      gh_user="$(echo "${gh_out}" | grep -oP "Hi \K[^!]+")"
+      echo ""
+      success "GitHub connection verified!  Authenticated as: ${gh_user:-<unknown>}"
+      echo ""
+      return 0
+    else
+      echo ""
+      error "GitHub connection failed:"
+      # Show the actual error so the user knows what to fix
+      while IFS= read -r line; do
+        error "  ${line}"
+      done <<< "${gh_out}"
+      echo ""
+      warn "Common causes:"
+      warn "  • Key not yet saved in GitHub (check the page loaded before)"
+      warn "  • Wrong GitHub account — make sure you added the key shown above"
+      warn "  • Network issue — check internet connectivity inside the VM"
+      echo ""
+    fi
+  done
 }

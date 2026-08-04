@@ -105,26 +105,36 @@ run_ansible() {
 # --------------------------------------------------------------------------- #
 # clone_kv_backend
 # Clones the kv-backend repo inside the VM via SSH.
-# Skips gracefully if already present or SSH key not yet on GitHub.
+# Called after setup_ssh_key() has already verified the GitHub connection,
+# so a failure here is a genuine problem (wrong repo, permissions, etc.).
 # --------------------------------------------------------------------------- #
 clone_kv_backend() {
   banner "Cloning kv-backend"
 
-  vm_exec "
+  local clone_out clone_rc
+  clone_out="$(vm_exec "
     KV_DIR=\$HOME/workspace/repos/kv-backend
     if [[ -d \"\$KV_DIR/.git\" ]]; then
       echo 'kv-backend already cloned — skipping.'
-    else
-      mkdir -p \"\$(dirname \$KV_DIR)\"
-      if git clone git@github.com:knowledgevault/kv-backend.git \"\$KV_DIR\" 2>&1; then
-        echo 'kv-backend cloned successfully.'
-      else
-        echo 'WARNING: kv-backend clone failed.'
-        echo 'Add your SSH key to GitHub then run inside the VM:'
-        echo '  git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend'
-      fi
+      exit 0
     fi
-  " 2>&1 | tee -a "$LOG_FILE"
+    mkdir -p \"\$(dirname \"\$KV_DIR\")\"
+    git clone \
+      -o StrictHostKeyChecking=accept-new \
+      git@github.com:knowledgevault/kv-backend.git \"\$KV_DIR\" 2>&1 \
+    && echo 'kv-backend cloned successfully.'
+  " 2>&1)" || clone_rc=$?
+  clone_rc="${clone_rc:-0}"
+
+  echo "${clone_out}" | tee -a "$LOG_FILE"
+
+  if [[ ${clone_rc} -ne 0 ]]; then
+    error "kv-backend clone failed (exit ${clone_rc})."
+    error "The GitHub SSH key was verified, so this may be a repository permission issue."
+    error "To retry inside the VM:"
+    error "  ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
+    error "  git clone git@github.com:knowledgevault/kv-backend.git ~/workspace/repos/kv-backend"
+  fi
 }
 
 # --------------------------------------------------------------------------- #
