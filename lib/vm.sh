@@ -74,17 +74,44 @@ vm_push() {
 
 # --------------------------------------------------------------------------- #
 # vm_sync_repo
-# Rsyncs the dev-environment repo into the VM when a native mount is not
-# available or failed.  Safe to call even when the mount succeeded.
+# Clones the dev-environment repo from the company remote inside the VM so
+# the VM has a proper git checkout pointing to the company repo.
+# If the directory already exists and is a git repo, skips the clone.
+# Falls back to rsync if DEV_ENV_REPO is unset or the clone fails.
 # --------------------------------------------------------------------------- #
 vm_sync_repo() {
-  info "Syncing repo to VM:/home/${VM_SSH_USER}/dev-environment..."
+  local repo="${DEV_ENV_REPO:-}"
+  local vm_dir="/home/${VM_SSH_USER}/dev-environment"
+
+  if [[ -n "${repo}" ]]; then
+    info "Cloning/updating dev-environment repo inside VM from ${repo}..."
+    vm_exec "
+      if [[ -d '${vm_dir}/.git' ]]; then
+        echo 'dev-environment already cloned — pulling latest...'
+        git -C '${vm_dir}' pull --ff-only 2>&1 || git -C '${vm_dir}' pull 2>&1
+      else
+        rm -rf '${vm_dir}'
+        git clone '${repo}' '${vm_dir}' 2>&1
+      fi
+    " 2>&1 | tee -a "$LOG_FILE" || {
+      warn "git pull/clone of dev-environment failed — falling back to rsync."
+      _vm_sync_repo_rsync
+    }
+  else
+    warn "DEV_ENV_REPO not set — falling back to rsync for dev-environment."
+    _vm_sync_repo_rsync
+  fi
+}
+
+# _vm_sync_repo_rsync — original rsync fallback (internal use only)
+_vm_sync_repo_rsync() {
+  info "Syncing repo to VM:${vm_dir} via rsync..."
   rsync -az \
     -e "ssh -i ${VM_SSH_KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${VM_SSH_PORT:-22}" \
     --exclude '.git' \
     --exclude '*.qcow2' \
     "${REPO_ROOT}/" \
-    "${VM_SSH_USER}@${VM_IP}:/home/${VM_SSH_USER}/dev-environment/" \
+    "${VM_SSH_USER}@${VM_IP}:${vm_dir}/" \
     2>&1 | tee -a "$LOG_FILE" || true
 }
 
