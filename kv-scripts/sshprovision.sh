@@ -2,23 +2,25 @@
 # =============================================================================
 # kv-scripts/sshprovision.sh — Provision kv-backend services inside the VM
 #
-# Automates all manual setup steps from the Confluence doc:
-# https://confluence.dtg.nl/display/KV/KV-Backend+Local+Dockerized+Setup
+# Automates all manual setup steps from the Confluence doc.
 #
 # Flow:
 #   1. Load preload Docker images from tarball
 #   2. Apply local config patches (rabbitmq.xml, db-scripts)
-#   3. Build WAR files via Maven (CRITICAL: before docker-compose mounts them)
+#   3. Build WAR files via Maven  ← MUST happen before docker-compose mounts them
 #   4. Start docker-compose services
-#   5. Run database initialization scripts
+#   5. Run database initialization scripts (quick-setup.sh)
 #   6. Verify services are running
+#
+# Error handling:
+#   Each step runs independently — a failure is recorded but execution continues.
+#   At the end all failed steps are retried once.
+#   Only after the retry pass does the script exit non-zero if anything is still broken.
 #
 # Usage:
 #   bash sshprovision.sh [--ci]
-#
-# --ci flag: non-interactive mode (used by provision.sh)
 # =============================================================================
-set -euo pipefail
+set -uo pipefail   # note: no -e so each step can fail without stopping the script
 
 KV_DIR="${HOME}/workspace/repos/kv-backend"
 PRELOAD_DIR="${KV_DIR}/preload-docker-compose"
@@ -27,223 +29,245 @@ IMAGE_PATH="${IMAGE_PATH:-${HOME}/dev-environment/assets/preload_kv.tar.gz}"
 _info()    { echo "[sshprovision] INFO  $*"; }
 _success() { echo "[sshprovision] OK    $*"; }
 _warn()    { echo "[sshprovision] WARN  $*"; }
-_die()     { echo "[sshprovision] ERROR $*" >&2; exit 1; }
+_error()   { echo "[sshprovision] ERROR $*" >&2; }
 
 CI_MODE=false
 [[ "${1:-}" == "--ci" ]] && CI_MODE=true
+
+# Track failed step names so we can retry them
+FAILED_STEPS=()
+
+# --------------------------------------------------------------------------- #
+# _run_step <name> <function>
+# Runs a function, records it in FAILED_STEPS if it fails.
+# --------------------------------------------------------------------------- #
+_run_step() {
+  local name="$1"
+  local func="$2"
+  echo ""
+  echo "── Step: ${name} ──────────────────────────────────────────"
+  if ${func}; then
+    _success "${name} completed"
+  else
+    _error "${name} FAILED — will retry at end of run"
+    FAILED_STEPS+=("${name}:${func}")
+  fi
+}
 
 # --------------------------------------------------------------------------- #
 # Guard: kv-backend must be cloned
 # --------------------------------------------------------------------------- #
 if [[ ! -d "${KV_DIR}" ]]; then
-  _die "kv-backend not found at ${KV_DIR}"
+  _error "kv-backend not found at ${KV_DIR}"
+  exit 1
 fi
-
 if [[ ! -d "${PRELOAD_DIR}" ]]; then
-  _die "preload-docker-compose not found at ${PRELOAD_DIR}"
+  _error "preload-docker-compose not found at ${PRELOAD_DIR}"
+  exit 1
 fi
 
 # --------------------------------------------------------------------------- #
-# 1. Load preload Docker images from tarball
+# Step 1: Load preload Docker images from tarball
 # --------------------------------------------------------------------------- #
 _load_preload_images() {
-  _info "Loading preload Docker images..."
-
   if [[ ! -f "${IMAGE_PATH}" ]]; then
-    _warn "Preload tarball not found at ${IMAGE_PATH}"
-    _warn "Docker images will be pulled from Hub on first docker-compose up"
+    _warn "Preload tarball not found at ${IMAGE_PATH} — Docker will pull images from Hub"
     return 0
   fi
 
   if ! file "${IMAGE_PATH}" | grep -qE 'gzip|tar archive'; then
-    _warn "Preload tarball is not a valid gzip/tar file: ${IMAGE_PATH}"
+    _warn "Tarball at ${IMAGE_PATH} is not valid gzip/tar — skipping image load"
     return 0
   fi
 
-  _info "Loading images from ${IMAGE_PATH} (this may take several minutes)..."
-  if gunzip -c "${IMAGE_PATH}" | docker load; then
-    _success "Preload images loaded"
-  else
-    _warn "Failed to load preload images — docker-compose will pull from Hub"
-  fi
+  _info "Loading images from ${IMAGE_PATH} (this may take several minutes ~750MB)..."
+  gunzip -c "${IMAGE_PATH}" | docker load
 }
 
 # --------------------------------------------------------------------------- #
-# 2. Apply local config patches
+# Step 2: Apply local config patches (do not commit these changes)
 # --------------------------------------------------------------------------- #
 _apply_config_patches() {
-  _info "Applying local config patches..."
+  local rc=0
 
-  # Patch: rabbitmq.xml — change addresses from ${rabbitmq.addresses} to ${rabbitmq.host}
+  # rabbitmq.xml: addresses="${rabbitmq.addresses}" → addresses="${rabbitmq.host}"
   local rabbitmq_xml="${KV_DIR}/portal/src/main/resources/spring/rabbitmq/rabbitmq.xml"
   if [[ -f "${rabbitmq_xml}" ]]; then
     if grep -q 'addresses="\${rabbitmq.addresses}"' "${rabbitmq_xml}"; then
       sed -i 's/addresses="\${rabbitmq.addresses}"/addresses="${rabbitmq.host}"/g' "${rabbitmq_xml}"
-      _success "rabbitmq.xml patched"
+      _success "rabbitmq.xml: patched addresses property"
+    else
+      _info "rabbitmq.xml: already patched — skipping"
     fi
+  else
+    _warn "rabbitmq.xml not found at ${rabbitmq_xml}"
   fi
 
-  # Patch: db-scripts — add SET FOREIGN_KEY_CHECKS = 0 to migration file
+  # db-scripts: prepend SET FOREIGN_KEY_CHECKS = 0; to migration file
   local db_migration="${KV_DIR}/db-scripts/db-scripts-kv-mysql/src/main/resources/db/migration/V1.0.0.22__location_id_size_update.sql"
   if [[ -f "${db_migration}" ]]; then
     if ! head -1 "${db_migration}" | grep -q "SET FOREIGN_KEY_CHECKS"; then
       sed -i '1i SET FOREIGN_KEY_CHECKS = 0;' "${db_migration}"
-      _success "db-scripts migration patched"
+      _success "db-scripts: SET FOREIGN_KEY_CHECKS = 0 prepended to migration"
+    else
+      _info "db-scripts: migration already patched — skipping"
     fi
+  else
+    _warn "Migration file not found: ${db_migration}"
   fi
+
+  return ${rc}
 }
 
 # --------------------------------------------------------------------------- #
-# 3. Build WAR files via Maven
+# Step 3: Build WAR files via Maven
 #
-# CRITICAL: This MUST happen BEFORE docker-compose tries to mount them.
-# The docker-compose.yml has volume mounts like:
-#   - ${KV_BACKEND_DIR}/kv-backend/target/kv-backend-*.war:/usr/local/tomcat/webapps/BACKEND.war
-# If the WAR doesn't exist, docker-compose will fail with:
-#   "not a directory: Are you trying to mount a directory onto a file?"
+# Must happen BEFORE docker-compose starts. The compose file mounts WAR paths:
+#   kv-backend/target/kv-backend-*.war → /usr/local/tomcat/webapps/BACKEND.war
+# If the file doesn't exist docker will fail with "not a directory" error.
 # --------------------------------------------------------------------------- #
 _build_war_files() {
-  _info "Building WAR files via Maven..."
-  _info "(This may take 10-15 minutes on first run)"
+  # Diagnose common Maven failures before starting
+  if [[ ! -f "${HOME}/.m2/settings.xml" ]]; then
+    _warn "~/.m2/settings.xml missing — Nexus artifacts may fail to resolve"
+  elif grep -q 'USERNAME\|PASSWORD' "${HOME}/.m2/settings.xml" 2>/dev/null; then
+    _error "~/.m2/settings.xml still has placeholder USERNAME/PASSWORD."
+    _error "Set NEXUS_USERNAME and NEXUS_PASSWORD in config.env on the host and re-provision."
+    return 1
+  fi
 
   cd "${KV_DIR}"
 
-  # Check if WARs already exist and are recent (less than 1 hour old)
-  local portal_war="${KV_DIR}/portal/target/portal-*.war"
-  local backend_war="${KV_DIR}/kv-backend/target/kv-backend-*.war"
+  # Skip rebuild if WARs exist and are recent (< 1 hour old)
+  local portal_war
+  portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
+  local backend_war
+  backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
 
-  if ls ${portal_war} >/dev/null 2>&1 && ls ${backend_war} >/dev/null 2>&1; then
-    local portal_age=$(($(date +%s) - $(stat -c %Y ${portal_war} 2>/dev/null | head -1)))
-    if [[ ${portal_age} -lt 3600 ]]; then
-      _success "WAR files already built and recent — skipping rebuild"
+  if [[ -n "${portal_war}" && -n "${backend_war}" ]]; then
+    local age=$(( $(date +%s) - $(stat -c %Y "${portal_war}") ))
+    if [[ ${age} -lt 3600 ]]; then
+      _success "WAR files already built and recent (${age}s old) — skipping rebuild"
       return 0
     fi
   fi
 
-  # Build with parallel compilation and skip tests
-  if mvn clean package -T 4 -am -pl portal,kv-backend -Dmaven.test.skip -Denforcer.skip=true; then
-    _success "WAR files built successfully"
-  else
-    _die "Maven build failed — check logs above"
-  fi
+  _info "Building WAR files (this may take 10-15 minutes on first run)..."
+  mvn clean package -T 4 -am -pl portal,kv-backend -Dmaven.test.skip -Denforcer.skip=true
 }
 
 # --------------------------------------------------------------------------- #
-# 4. Start docker-compose services
+# Step 4: Start docker-compose services
 # --------------------------------------------------------------------------- #
 _start_docker_compose() {
-  _info "Starting docker-compose services..."
-
   cd "${PRELOAD_DIR}"
 
-  if docker compose up -d; then
-    _success "docker-compose services started"
-  else
-    _die "docker-compose up failed"
-  fi
+  _info "Starting docker-compose services..."
+  docker compose up -d
 
-  # Wait for services to be ready
-  _info "Waiting for services to be ready (this may take 1-2 minutes)..."
-  sleep 10
-
-  local max_attempts=30
+  _info "Waiting for portal container to come up (up to 150s)..."
   local attempt=0
-  while [[ ${attempt} -lt ${max_attempts} ]]; do
-    if docker compose ps | grep -q "portal.*Up"; then
-      _success "Services are ready"
+  while [[ ${attempt} -lt 30 ]]; do
+    if docker compose ps --format json 2>/dev/null | grep -q '"portal"' || \
+       docker compose ps 2>/dev/null | grep -E 'portal.*(Up|running)' >/dev/null 2>&1; then
+      _success "Portal container is up"
       return 0
     fi
-    attempt=$((attempt + 1))
+    attempt=$(( attempt + 1 ))
     sleep 5
   done
 
-  _warn "Services did not become ready within timeout — continuing anyway"
+  _warn "Portal container did not become ready within 150s"
+  docker compose ps
+  return 1
 }
 
 # --------------------------------------------------------------------------- #
-# 5. Run database initialization scripts
+# Step 5: Run database initialization (quick-setup.sh)
 # --------------------------------------------------------------------------- #
 _run_db_scripts() {
-  _info "Running database initialization scripts..."
-
   cd "${PRELOAD_DIR}"
 
-  # Run quick-setup.sh if it exists
-  if [[ -f "quick-setup.sh" ]]; then
-    _info "Running quick-setup.sh..."
-    if bash quick-setup.sh; then
-      _success "quick-setup.sh completed"
+  if [[ ! -f "quick-setup.sh" ]]; then
+    _warn "quick-setup.sh not found in ${PRELOAD_DIR} — skipping DB init"
+    return 0
+  fi
+
+  _info "Running quick-setup.sh..."
+  bash quick-setup.sh
+}
+
+# --------------------------------------------------------------------------- #
+# Step 6: Verify services are running
+# --------------------------------------------------------------------------- #
+_verify_services() {
+  cd "${PRELOAD_DIR}"
+
+  echo ""
+  _info "Container status:"
+  docker compose ps
+
+  local all_ok=true
+
+  _check() {
+    local name="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+      _success "${name} is responding"
     else
-      _warn "quick-setup.sh failed — database may not be fully initialized"
+      _warn "${name} not yet responding"
+      all_ok=false
     fi
+  }
+
+  _check "MySQL"    docker compose exec -T mysql-8   mysql -uroot -proot -e "SELECT 1"
+  _check "RabbitMQ" docker compose exec -T rabbitmq  rabbitmq-diagnostics -q ping
+  _check "Cassandra" docker compose exec -T cassandra nodetool status
+  _check "Solr"     curl -sf http://localhost:58983/solr/admin/cores
+  _check "Portal"   curl -sf http://localhost:8080/admin/login.html
+
+  if [[ "${all_ok}" == "true" ]]; then
+    _success "All services healthy"
   else
-    _warn "quick-setup.sh not found — skipping database initialization"
+    _warn "Some services not yet responding — they may still be starting up"
+    _info "Tail logs: docker compose logs -f"
+    return 1
   fi
 }
 
 # --------------------------------------------------------------------------- #
-# 6. Verify services are running
+# Retry pass — run any failed steps once more
 # --------------------------------------------------------------------------- #
-_verify_services() {
-  _info "Verifying services..."
-
-  cd "${PRELOAD_DIR}"
-
-  echo ""
-  _info "Docker Compose Status:"
-  docker compose ps
-
-  echo ""
-  _info "Service Health Check:"
-
-  local services_ok=true
-
-  # Check MySQL
-  if docker compose exec -T mysql-8 mysql -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
-    _success "MySQL is responding"
-  else
-    _warn "MySQL is not responding yet"
-    services_ok=false
-  fi
-
-  # Check RabbitMQ
-  if docker compose exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
-    _success "RabbitMQ is responding"
-  else
-    _warn "RabbitMQ is not responding yet"
-    services_ok=false
-  fi
-
-  # Check Cassandra
-  if docker compose exec -T cassandra nodetool status >/dev/null 2>&1; then
-    _success "Cassandra is responding"
-  else
-    _warn "Cassandra is not responding yet"
-    services_ok=false
-  fi
-
-  # Check Solr
-  if curl -s http://localhost:58983/solr/admin/cores >/dev/null 2>&1; then
-    _success "Solr is responding"
-  else
-    _warn "Solr is not responding yet"
-    services_ok=false
-  fi
-
-  # Check Portal (Tomcat)
-  if curl -s http://localhost:8080/admin/login.html >/dev/null 2>&1; then
-    _success "Portal (Tomcat) is responding"
-  else
-    _warn "Portal (Tomcat) is not responding yet — it may still be starting up"
-    services_ok=false
+_retry_failed() {
+  if [[ ${#FAILED_STEPS[@]} -eq 0 ]]; then
+    return 0
   fi
 
   echo ""
-  if [[ "${services_ok}" == "true" ]]; then
-    _success "All services are healthy"
-  else
-    _warn "Some services are not yet responding — they may still be starting up"
-    _info "Check logs with: docker compose logs -f"
+  echo "══════════════════════════════════════════════════════════"
+  echo "  Retrying ${#FAILED_STEPS[@]} failed step(s)..."
+  echo "══════════════════════════════════════════════════════════"
+
+  local still_failed=()
+  for entry in "${FAILED_STEPS[@]}"; do
+    local name="${entry%%:*}"
+    local func="${entry##*:}"
+    echo ""
+    echo "── Retry: ${name} ─────────────────────────────────────────"
+    if ${func}; then
+      _success "${name} succeeded on retry"
+    else
+      _error "${name} failed again"
+      still_failed+=("${name}")
+    fi
+  done
+
+  if [[ ${#still_failed[@]} -gt 0 ]]; then
+    echo ""
+    _error "The following steps failed after retry:"
+    for s in "${still_failed[@]}"; do
+      _error "  - ${s}"
+    done
+    return 1
   fi
 }
 
@@ -257,29 +281,37 @@ main() {
   echo "╚════════════════════════════════════════════════════════╝"
   echo ""
 
-  _load_preload_images
-  _apply_config_patches
-  _build_war_files
-  _start_docker_compose
-  _run_db_scripts
-  _verify_services
+  _run_step "Load Docker images"        _load_preload_images
+  _run_step "Apply config patches"      _apply_config_patches
+  _run_step "Build WAR files (Maven)"   _build_war_files
+  _run_step "Start docker-compose"      _start_docker_compose
+  _run_step "Database initialization"   _run_db_scripts
+  _run_step "Verify services"           _verify_services
+
+  _retry_failed
+  local retry_rc=$?
 
   echo ""
-  echo "╔════════════════════════════════════════════════════════╗"
-  echo "║  ✔ Provisioning Complete                              ║"
-  echo "╚════════════════════════════════════════════════════════╝"
+  if [[ ${retry_rc} -eq 0 && ${#FAILED_STEPS[@]} -eq 0 ]]; then
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║  ✔ Provisioning Complete                               ║"
+    echo "╚════════════════════════════════════════════════════════╝"
+  else
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║  ⚠  Provisioning finished with errors — see above      ║"
+    echo "╚════════════════════════════════════════════════════════╝"
+  fi
+
   echo ""
-  echo "Access the application:"
   echo "  URL:      http://localhost:8080/admin/login.html"
   echo "  Username: system_2"
   echo "  Password: admin"
   echo ""
-  echo "View logs:"
-  echo "  docker compose logs -f"
+  echo "  View logs:    docker compose -f ${PRELOAD_DIR}/docker-compose.yml logs -f"
+  echo "  Restart:      docker compose -f ${PRELOAD_DIR}/docker-compose.yml restart"
   echo ""
-  echo "Restart services:"
-  echo "  docker compose restart"
-  echo ""
+
+  return ${retry_rc}
 }
 
 main

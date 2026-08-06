@@ -41,6 +41,56 @@ if [[ ! -d "${KV_DIR}" ]]; then
 fi
 
 # --------------------------------------------------------------------------- #
+# 0. Write ~/.m2/settings.xml with Nexus credentials
+# --------------------------------------------------------------------------- #
+NEXUS_USER="${NEXUS_USERNAME:-}"
+NEXUS_PASS="${NEXUS_PASSWORD:-}"
+
+if [[ -z "${NEXUS_USER}" || -z "${NEXUS_PASS}" ]]; then
+  _warn "NEXUS_USERNAME or NEXUS_PASSWORD not set — Maven build will fail with 401."
+  _warn "Add them to config.env on the host and re-run provision.sh."
+else
+  mkdir -p "${HOME}/.m2"
+  cat > "${HOME}/.m2/settings.xml" <<EOF
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>kv-repo</id>
+      <username>${NEXUS_USER}</username>
+      <password>${NEXUS_PASS}</password>
+    </server>
+  </servers>
+  <profiles>
+    <profile>
+      <id>custom-profile</id>
+      <repositories>
+        <repository>
+          <id>kv-repo</id>
+          <url>https://nexus.cicd.nextgen-kiyoh.com/repository/kv-old-super-group</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+        <repository>
+          <id>central</id>
+          <url>https://repo.maven.apache.org/maven2</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>custom-profile</activeProfile>
+  </activeProfiles>
+</settings>
+EOF
+  _success "~/.m2/settings.xml written with Nexus credentials"
+fi
+
+# --------------------------------------------------------------------------- #
 # 1. hazelcast.xml — portal resources
 # --------------------------------------------------------------------------- #
 PORTAL_RES="${KV_DIR}/portal/src/main/resources"

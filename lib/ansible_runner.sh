@@ -166,7 +166,7 @@ apply_kv_config() {
       exit 1
     fi
     chmod +x ${apply_script}
-    bash ${apply_script}
+    NEXUS_USERNAME='${NEXUS_USERNAME:-}' NEXUS_PASSWORD='${NEXUS_PASSWORD:-}' bash ${apply_script}
   " 2>&1 | tee -a "$LOG_FILE"
 
   local rc=${PIPESTATUS[0]}
