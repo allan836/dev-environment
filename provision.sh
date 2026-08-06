@@ -391,14 +391,18 @@ main() {
   # is ready for 'docker load'.
   _SSH_FAILED_STEP="clone kv-backend"
   clone_kv_backend
-  _SSH_FAILED_STEP="apply kv-backend local config"
-  apply_kv_config
   _SSH_FAILED_STEP="download kv-backend assets"
   download_kv_assets
 
+  # Install all tools first via Ansible before applying config or starting services.
   _SSH_FAILED_STEP="Provisioning VM (Ansible)"
   step 7 7 "Provisioning VM"
   run_ansible
+
+  # Apply kv-backend config after Ansible has installed all dependencies (Maven, Java, etc.)
+  _SSH_FAILED_STEP="apply kv-backend local config"
+  apply_kv_config
+
   _SSH_FAILED_STEP="start kv-backend services"
   start_kv_services
 
