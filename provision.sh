@@ -148,6 +148,7 @@ export ANSIBLE_DIR LOG_FILE REPO_ROOT DEBUG
 export PROVIDER_PRIORITY ACTIVE_PROVIDER SELECTED_PROVIDER AVAILABLE_PROVIDERS
 export UBUNTU_CLOUD_IMAGE_URL UBUNTU_CLOUD_IMAGE_URL_ARM
 export KV_BACKEND_REPO KV_BACKEND_TARBALL_URL
+export DEV_ENV_REPO
 
 # --------------------------------------------------------------------------- #
 # Argument parsing

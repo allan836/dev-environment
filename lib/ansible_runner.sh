@@ -181,8 +181,11 @@ download_kv_assets() {
     mkdir -p "$(dirname "${host_tarball}")"
 
     local dl_rc=0
-    # S3 download via AWS CLI.
-    aws s3 cp "${KV_BACKEND_TARBALL_URL}" "${host_tarball}" 2>&1 || dl_rc=$?
+    # Public HTTPS download — no AWS credentials required.
+    # curl progress goes to stderr (terminal) so the % column is visible.
+    curl -fL \
+      -o "${host_tarball}" \
+      "${KV_BACKEND_TARBALL_URL}" || dl_rc=$?
 
     if [[ ${dl_rc} -ne 0 ]]; then
       warn "Tarball download failed (exit ${dl_rc})."
