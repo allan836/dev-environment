@@ -344,7 +344,8 @@ start_kv_services() {
     fi
     chmod +x \"\$SCRIPT\"
     cd \"\$(dirname \"\$SCRIPT\")\"
-    bash \"\$SCRIPT\" --ci 2>&1
+    IMAGE_PATH=\$HOME/dev-environment/assets/preload_kv.tar.gz \
+      bash \"\$SCRIPT\" --ci 2>&1
   " 2>&1 | tee -a "$LOG_FILE"
 
   local rc=${PIPESTATUS[0]}
