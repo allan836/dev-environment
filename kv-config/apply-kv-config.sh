@@ -126,7 +126,23 @@ _inject_xalan "${KV_DIR}/portal/pom.xml"
 _inject_xalan "${KV_DIR}/kv-backend/pom.xml"
 
 # --------------------------------------------------------------------------- #
-# 7. Create directories referenced by configuration.properties
+# 7. Copy sshprovision.sh to preload-docker-compose
+# --------------------------------------------------------------------------- #
+PRELOAD_DIR="${KV_DIR}/preload-docker-compose"
+if [[ -d "${PRELOAD_DIR}" ]]; then
+  if [[ -f "${CONFIG_DIR}/../kv-scripts/sshprovision.sh" ]]; then
+    cp "${CONFIG_DIR}/../kv-scripts/sshprovision.sh" "${PRELOAD_DIR}/sshprovision.sh"
+    chmod +x "${PRELOAD_DIR}/sshprovision.sh"
+    _success "sshprovision.sh → preload-docker-compose/"
+  else
+    _warn "kv-scripts/sshprovision.sh not found — skipping"
+  fi
+else
+  _warn "preload-docker-compose not found — skipping sshprovision.sh copy"
+fi
+
+# --------------------------------------------------------------------------- #
+# 8. Create directories referenced by configuration.properties
 # --------------------------------------------------------------------------- #
 mkdir -p "${HOME}/uploads/invite"
 mkdir -p "${HOME}/data/seller_rating/merged_feed"
