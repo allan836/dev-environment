@@ -156,6 +156,10 @@ clone_kv_backend() {
 apply_kv_config() {
   banner "Applying kv-backend local config"
 
+  # Ensure the dev-environment repo is present in the VM before we try to use it.
+  info "Syncing dev-environment repo into VM..."
+  vm_sync_repo
+
   local apply_script="\$HOME/dev-environment/kv-config/apply-kv-config.sh"
 
   info "Running apply-kv-config.sh inside VM..."
