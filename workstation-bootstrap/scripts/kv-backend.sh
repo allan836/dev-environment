@@ -58,7 +58,17 @@ cmd_load_images() {
     exit 1
   fi
   echo "==> Loading preload images from $PRELOAD_TAR (this can take several minutes, ~750MB)"
-  docker load -i "$PRELOAD_TAR"
+  # Validate the tarball before attempting to load.
+  if ! file "$PRELOAD_TAR" | grep -qE 'gzip|tar archive'; then
+    echo "Error: $PRELOAD_TAR is not a valid tar/gzip file." >&2
+    echo "       Run: file $PRELOAD_TAR   to inspect, and re-download if it is an HTML page." >&2
+    exit 1
+  fi
+  if file "$PRELOAD_TAR" | grep -q 'gzip'; then
+    gunzip -c "$PRELOAD_TAR" | docker load
+  else
+    docker load -i "$PRELOAD_TAR"
+  fi
   if images_missing; then
     echo "Error: docker load completed but expected images are still missing:" >&2
     for img in "${PRELOAD_IMAGES[@]}"; do

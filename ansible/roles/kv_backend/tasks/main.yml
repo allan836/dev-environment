@@ -33,7 +33,15 @@
 
 - name: Load preload Docker images into Docker daemon
   ansible.builtin.shell:
-    cmd: docker load -i {{ dev_home }}/dev-environment/assets/preload_kv.tar.gz
+    cmd: |
+      TARBALL="{{ dev_home }}/dev-environment/assets/preload_kv.tar.gz"
+      # Validate it is actually a tar/gzip file before attempting to load.
+      if ! file "$TARBALL" | grep -qE 'gzip|tar archive'; then
+        echo "WARNING: $TARBALL does not appear to be a valid tar/gzip file — skipping docker load."
+        echo "         Run: file $TARBALL   to inspect, and re-download if it is an HTML page."
+        exit 0
+      fi
+      gunzip -c "$TARBALL" | docker load
     executable: /bin/bash
   become: false
   become_user: "{{ dev_user }}"

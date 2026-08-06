@@ -146,11 +146,16 @@ clone_kv_backend() {
 
 # --------------------------------------------------------------------------- #
 # download_kv_assets
-# Downloads the pre-built Docker image tarball into the VM so that
-# 'make kv-up' does not have to pull all images from Docker Hub on first run.
+# Downloads the pre-built Docker image tarball onto the HOST first, then
+# pushes it into the VM.  This avoids Google Drive downloads failing inside
+# the VM (cookie/consent pages produce corrupt HTML instead of the real file).
 #
-# The tarball is placed at ~/dev-environment/assets/preload_kv.tar.gz, which
-# is where the kv_backend Ansible role's Docker load task looks for it.
+# The tarball is placed at:
+#   Host: ${REPO_ROOT}/assets/preload_kv.tar.gz
+#   VM:   ~/dev-environment/assets/preload_kv.tar.gz
+#
+# If the tarball already exists on the host, the download is skipped and the
+# file is just pushed to the VM (if the VM doesn't already have it).
 #
 # Skips silently if KV_BACKEND_TARBALL_URL is empty.
 # --------------------------------------------------------------------------- #
@@ -160,58 +165,195 @@ download_kv_assets() {
     return 0
   fi
 
+  local host_tarball="${REPO_ROOT}/assets/preload_kv.tar.gz"
+  local vm_tarball='$HOME/dev-environment/assets/preload_kv.tar.gz'
+
   banner "Downloading kv-backend Docker image tarball"
   info "URL: ${KV_BACKEND_TARBALL_URL}"
-  info "Destination (inside VM): ~/dev-environment/assets/preload_kv.tar.gz"
+  info "Host destination: ${host_tarball}"
+  info "VM destination: ~/dev-environment/assets/preload_kv.tar.gz"
 
-  local dl_out dl_rc=0
-  dl_out="$(vm_exec "
-    set -euo pipefail
-    DEST=\$HOME/dev-environment/assets/preload_kv.tar.gz
-    if [[ -f \"\$DEST\" ]]; then
-      echo 'Tarball already present — skipping download.'
-      exit 0
-    fi
-    mkdir -p \"\$(dirname \"\$DEST\")\"
-    echo 'Downloading tarball (this may take a few minutes)...'
-    # Google Drive large-file download: the first request returns a cookie-gated
-    # confirmation page; follow it with the confirm token to get the real file.
-    COOKIEJAR=\$(mktemp /tmp/gdrive-cookies-XXXXXX)
+  # ── Step 1: Download on the HOST if not already present ──────────────── #
+  if [[ -f "${host_tarball}" ]]; then
+    info "Tarball already present on host — skipping download."
+  else
+    info "Downloading tarball to host (this may take a few minutes)..."
+    mkdir -p "$(dirname "${host_tarball}")"
+
+    local dl_rc=0
+    # Google Drive large-file download: two-pass with cookie jar to bypass
+    # the virus-scan interstitial / consent page.
+    local cookiejar; cookiejar="$(mktemp /tmp/gdrive-cookies-XXXXXX)"
     curl -fsSL --max-time 30 \
-      --cookie-jar \"\$COOKIEJAR\" \
-      '${KV_BACKEND_TARBALL_URL}' -o /dev/null
+      --cookie-jar "${cookiejar}" \
+      "${KV_BACKEND_TARBALL_URL}" -o /dev/null 2>>"$LOG_FILE" || true
     curl -fL --progress-bar --max-time 1800 \
-      --cookie \"\$COOKIEJAR\" \
-      '${KV_BACKEND_TARBALL_URL}' -o \"\$DEST\"
-    rm -f \"\$COOKIEJAR\"
-    echo 'Tarball downloaded: '\$(du -sh \"\$DEST\" | cut -f1)
-  " 2>&1)" || dl_rc=$?
+      --cookie "${cookiejar}" \
+      "${KV_BACKEND_TARBALL_URL}" -o "${host_tarball}" 2>>"$LOG_FILE" || dl_rc=$?
+    rm -f "${cookiejar}"
 
-  echo "${dl_out}" | tee -a "$LOG_FILE"
+    if [[ ${dl_rc} -ne 0 ]]; then
+      warn "Tarball download failed (exit ${dl_rc})."
+      warn "Docker images will be pulled from Hub on first kv-up."
+      rm -f "${host_tarball}"
+      return 0
+    fi
 
-  if [[ ${dl_rc} -ne 0 ]]; then
-    warn "Tarball download failed (exit ${dl_rc}) — Docker images will be pulled from Hub on first kv-up."
-    warn "To retry: ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
-    warn "  curl -fL '${KV_BACKEND_TARBALL_URL}' -o ~/dev-environment/assets/preload_kv.tar.gz"
+    # Validate the downloaded file is actually a gzip/tar, not an HTML page.
+    if ! file "${host_tarball}" | grep -qE 'gzip|tar archive'; then
+      warn "Downloaded tarball is not a valid gzip/tar file (likely a Google Drive consent page)."
+      warn "Removing corrupt file. Docker images will be pulled from Hub on first kv-up."
+      rm -f "${host_tarball}"
+      return 0
+    fi
+
+    info "Tarball downloaded: $(du -sh "${host_tarball}" | cut -f1)"
+  fi
+
+  # ── Step 2: Push to VM if not already present ────────────────────────── #
+  local vm_has_tarball
+  vm_has_tarball="$(vm_exec "test -f ${vm_tarball} && echo yes || echo no" 2>/dev/null || echo no)"
+
+  if [[ "${vm_has_tarball}" == "yes" ]]; then
+    info "Tarball already present in VM — skipping push."
     return 0
   fi
+
+  info "Pushing tarball to VM..."
+  vm_exec "mkdir -p \$HOME/dev-environment/assets" 2>/dev/null || true
+  vm_push "${host_tarball}" "/home/${VM_USER}/dev-environment/assets/preload_kv.tar.gz"
+  success "Tarball pushed to VM."
+}
+
+# --------------------------------------------------------------------------- #
+# _push_kv_env
+# Copies the host-side kv-backend secrets file into the VM so that
+# sshprovision.sh can run in --ci mode (no interactive prompts).
+#
+# Lookup order for the host-side file:
+#   1. ${KV_ENV_FILE}  environment variable (CI override)
+#   2. ${REPO_ROOT}/kv-backend.env
+#   3. ${REPO_ROOT}/preload-docker-compose/.env  (legacy location)
+#
+# If none exist, the function prints guidance and returns 1 so the caller
+# can decide whether to abort or continue with a degraded run.
+# --------------------------------------------------------------------------- #
+_push_kv_env() {
+  local remote_env_path='$HOME/workspace/repos/kv-backend/preload-docker-compose/.env'
+
+  # ── Check whether the VM already has a valid .env ─────────────────────── #
+  local remote_has_env
+  remote_has_env="$(vm_exec "
+    f=\$HOME/workspace/repos/kv-backend/preload-docker-compose/.env
+    if [[ -f \"\$f\" ]] && grep -q '^NEXUS_USERNAME=[^[:space:]]' \"\$f\" 2>/dev/null; then
+      echo yes
+    else
+      echo no
+    fi
+  " 2>/dev/null || echo no)"
+
+  if [[ "${remote_has_env}" == "yes" ]]; then
+    info "VM already has a valid kv-backend .env — skipping push."
+    return 0
+  fi
+
+  # ── Find the host-side secrets file ───────────────────────────────────── #
+  local host_env=""
+  local candidates=(
+    "${KV_ENV_FILE:-}"
+    "${REPO_ROOT}/kv-backend.env"
+    "${REPO_ROOT}/preload-docker-compose/.env"
+  )
+  for f in "${candidates[@]}"; do
+    [[ -z "${f}" ]] && continue
+    if [[ -f "${f}" ]]; then
+      host_env="${f}"
+      break
+    fi
+  done
+
+  if [[ -z "${host_env}" ]]; then
+    warn "No host-side kv-backend secrets file found."
+    warn "sshprovision.sh will run in non-interactive mode and FAIL if"
+    warn "~/workspace/repos/kv-backend/preload-docker-compose/.env is absent."
+    warn ""
+    warn "To pre-seed secrets, create one of these files on the HOST:"
+    warn "  ${REPO_ROOT}/kv-backend.env   (recommended)"
+    warn "  ${REPO_ROOT}/preload-docker-compose/.env"
+    warn "  export KV_ENV_FILE=/path/to/file"
+    warn ""
+    warn "Template: ${REPO_ROOT}/preload-docker-compose/.env.template"
+    warn "          (if present in the kv-backend repo checkout)"
+    return 1
+  fi
+
+  info "Pushing kv-backend secrets to VM: ${host_env} → preload-docker-compose/.env"
+  vm_push "${host_env}" \
+    "/home/${VM_USER}/workspace/repos/kv-backend/preload-docker-compose/.env"
+  success "kv-backend .env pushed to VM."
 }
 
 # --------------------------------------------------------------------------- #
 # start_kv_services
-# Starts the kv-backend Docker Compose stack inside the VM.
+# SSHes into the VM and runs preload-docker-compose/sshprovision.sh in --ci
+# mode (non-interactive).  Secrets are pre-seeded by _push_kv_env() which
+# copies the host-side kv-backend.env before the script runs.
 # --------------------------------------------------------------------------- #
 start_kv_services() {
-  banner "Starting kv-backend Services"
+  banner "Running sshprovision.sh inside VM"
+
+  local script_path='$HOME/workspace/repos/kv-backend/preload-docker-compose/sshprovision.sh'
+
+  info "Script path (inside VM): ~/workspace/repos/kv-backend/preload-docker-compose/sshprovision.sh"
+
+  # Push the host .env into the VM so sshprovision.sh runs in --ci mode.
+  # _push_kv_env() warns if no host file is found but does NOT abort; the
+  # script itself will give a clear error if NEXUS_USERNAME is still missing.
+  _push_kv_env || true
+
+  # Remove corrupt preload tarball from a previous run (Google Drive used to
+  # download inside the VM and could leave an HTML file instead of gzip).
+  vm_exec "
+    TARBALL=\$HOME/dev-environment/assets/preload_kv.tar.gz
+    if [[ -f \"\$TARBALL\" ]] && ! file \"\$TARBALL\" | grep -qE 'gzip|tar archive'; then
+      echo 'Removing corrupt preload tarball from previous run...'
+      rm -f \"\$TARBALL\"
+    fi
+  " 2>/dev/null || true
 
   vm_exec "
-    BOOTSTRAP=\$HOME/dev-environment/workstation-bootstrap
-    if [[ -d \"\$BOOTSTRAP\" ]]; then
-      cd \"\$BOOTSTRAP\"
-      make kv-up 2>&1 \
-        || echo 'WARNING: kv-up failed. Run inside VM: cd ~/dev-environment/workstation-bootstrap && make kv-up'
-    else
-      echo 'workstation-bootstrap not found inside VM — skipping kv-up.'
+    set -euo pipefail
+
+    # nvm is shell-function based and is only loaded via ~/.bashrc in interactive
+    # sessions.  Non-interactive SSH (vm_exec) never sources .bashrc, so we must
+    # initialise nvm explicitly to put 'node' and 'npm' on PATH.
+    export NVM_DIR=\"\$HOME/.nvm\"
+    if [[ -s \"\$NVM_DIR/nvm.sh\" ]]; then
+      . \"\$NVM_DIR/nvm.sh\" --no-use
+      nvm use default 2>/dev/null || nvm use node 2>/dev/null || true
     fi
+
+    SCRIPT=${script_path}
+    if [[ ! -f \"\$SCRIPT\" ]]; then
+      echo 'ERROR: sshprovision.sh not found at \$SCRIPT'
+      echo 'Ensure clone_kv_backend() completed successfully before this step.'
+      exit 1
+    fi
+    chmod +x \"\$SCRIPT\"
+    cd \"\$(dirname \"\$SCRIPT\")\"
+    bash \"\$SCRIPT\" --ci 2>&1
   " 2>&1 | tee -a "$LOG_FILE"
+
+  local rc=${PIPESTATUS[0]}
+  if [[ $rc -ne 0 ]]; then
+    error "sshprovision.sh exited with code ${rc}."
+    error "  Full output: ${LOG_FILE}"
+    error "  To retry inside the VM:"
+    error "    ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
+    error "    cd ~/workspace/repos/kv-backend/preload-docker-compose"
+    error "    ./sshprovision.sh"
+    return 1
+  fi
+
+  success "sshprovision.sh completed — kv-backend stack is up."
 }
