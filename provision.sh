@@ -391,6 +391,8 @@ main() {
   # is ready for 'docker load'.
   _SSH_FAILED_STEP="clone kv-backend"
   clone_kv_backend
+  _SSH_FAILED_STEP="apply kv-backend local config"
+  apply_kv_config
   _SSH_FAILED_STEP="download kv-backend assets"
   download_kv_assets
 

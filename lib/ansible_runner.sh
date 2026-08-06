@@ -145,6 +145,40 @@ clone_kv_backend() {
 }
 
 # --------------------------------------------------------------------------- #
+# apply_kv_config
+# Runs kv-config/apply-kv-config.sh inside the VM.
+# Copies hazelcast.xml, mail.properties, HazelCastClusterManager.java,
+# portal configuration.properties, and backend configuration.properties from
+# ~/dev-environment/kv-config/ into the correct locations inside kv-backend,
+# and injects the xalan serializer pom.xml dependency.
+# Must be called after clone_kv_backend() and vm_sync_repo() have run.
+# --------------------------------------------------------------------------- #
+apply_kv_config() {
+  banner "Applying kv-backend local config"
+
+  local apply_script="\$HOME/dev-environment/kv-config/apply-kv-config.sh"
+
+  info "Running apply-kv-config.sh inside VM..."
+  vm_exec "
+    if [[ ! -f ${apply_script} ]]; then
+      echo 'ERROR: apply-kv-config.sh not found at ${apply_script}'
+      echo 'Ensure the dev-environment repo was cloned/synced before this step.'
+      exit 1
+    fi
+    chmod +x ${apply_script}
+    bash ${apply_script}
+  " 2>&1 | tee -a "$LOG_FILE"
+
+  local rc=${PIPESTATUS[0]}
+  if [[ $rc -ne 0 ]]; then
+    error "apply-kv-config.sh failed (exit ${rc}) — check ${LOG_FILE}"
+    return 1
+  fi
+
+  success "kv-backend local config applied."
+}
+
+# --------------------------------------------------------------------------- #
 # download_kv_assets
 # Downloads the pre-built Docker image tarball onto the HOST first, then
 # pushes it into the VM.  This avoids Google Drive downloads failing inside
