@@ -177,20 +177,12 @@ download_kv_assets() {
   if [[ -f "${host_tarball}" ]]; then
     info "Tarball already present on host — skipping download."
   else
-    info "Downloading tarball to host (this may take a few minutes)..."
+    info "Downloading tarball to host (~750 MB, this may take several minutes)..."
     mkdir -p "$(dirname "${host_tarball}")"
 
     local dl_rc=0
-    # Google Drive large-file download: two-pass with cookie jar to bypass
-    # the virus-scan interstitial / consent page.
-    local cookiejar; cookiejar="$(mktemp /tmp/gdrive-cookies-XXXXXX)"
-    curl -fsSL --max-time 30 \
-      --cookie-jar "${cookiejar}" \
-      "${KV_BACKEND_TARBALL_URL}" -o /dev/null 2>>"$LOG_FILE" || true
-    curl -fL --progress-bar --max-time 1800 \
-      --cookie "${cookiejar}" \
-      "${KV_BACKEND_TARBALL_URL}" -o "${host_tarball}" 2>>"$LOG_FILE" || dl_rc=$?
-    rm -f "${cookiejar}"
+    # S3 download via AWS CLI.
+    aws s3 cp "${KV_BACKEND_TARBALL_URL}" "${host_tarball}" 2>&1 || dl_rc=$?
 
     if [[ ${dl_rc} -ne 0 ]]; then
       warn "Tarball download failed (exit ${dl_rc})."
@@ -199,9 +191,9 @@ download_kv_assets() {
       return 0
     fi
 
-    # Validate the downloaded file is actually a gzip/tar, not an HTML page.
+    # Validate the downloaded file is actually a gzip/tar archive.
     if ! file "${host_tarball}" | grep -qE 'gzip|tar archive'; then
-      warn "Downloaded tarball is not a valid gzip/tar file (likely a Google Drive consent page)."
+      warn "Downloaded tarball is not a valid gzip/tar file."
       warn "Removing corrupt file. Docker images will be pulled from Hub on first kv-up."
       rm -f "${host_tarball}"
       return 0
@@ -219,9 +211,18 @@ download_kv_assets() {
     return 0
   fi
 
-  info "Pushing tarball to VM..."
+  info "Pushing tarball to VM (~$(du -sh "${host_tarball}" 2>/dev/null | cut -f1))..."
   vm_exec "mkdir -p \$HOME/dev-environment/assets" 2>/dev/null || true
-  vm_push "${host_tarball}" "/home/${VM_USER}/dev-environment/assets/preload_kv.tar.gz"
+  # rsync over SSH gives a proper progress bar (%, speed, ETA) unlike scp.
+  if command -v rsync >/dev/null 2>&1; then
+    rsync --progress --human-readable \
+      -e "ssh -i ${VM_SSH_KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${VM_SSH_PORT:-22}" \
+      "${host_tarball}" \
+      "${VM_SSH_USER}@${VM_IP}:/home/${VM_USER}/dev-environment/assets/preload_kv.tar.gz"
+  else
+    # Fallback to scp if rsync is not available (no progress bar).
+    vm_push "${host_tarball}" "/home/${VM_USER}/dev-environment/assets/preload_kv.tar.gz"
+  fi
   success "Tarball pushed to VM."
 }
 
@@ -311,8 +312,7 @@ start_kv_services() {
   # script itself will give a clear error if NEXUS_USERNAME is still missing.
   _push_kv_env || true
 
-  # Remove corrupt preload tarball from a previous run (Google Drive used to
-  # download inside the VM and could leave an HTML file instead of gzip).
+  # Remove corrupt preload tarball from a previous run.
   vm_exec "
     TARBALL=\$HOME/dev-environment/assets/preload_kv.tar.gz
     if [[ -f \"\$TARBALL\" ]] && ! file \"\$TARBALL\" | grep -qE 'gzip|tar archive'; then

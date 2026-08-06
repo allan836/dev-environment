@@ -39,6 +39,55 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --------------------------------------------------------------------------- #
+# SSH rescue: when the script dies after SSH is up, drop the user into an
+# interactive SSH session on the VM so they can inspect / debug / retry.
+# _SSH_READY is flipped true once wait_for_ssh succeeds; the trap is a no-op
+# before that point because the VM is not yet reachable.
+# --------------------------------------------------------------------------- #
+_SSH_READY=false
+_SSH_FAILED_STEP=""
+
+_drop_to_ssh() {
+  if [[ "${_SSH_READY}" != "true" ]]; then
+    return
+  fi
+
+  # If SSH variables are missing (edge case), try loading saved state.
+  if [[ -z "${VM_IP:-}" || -z "${VM_SSH_KEY:-}" ]]; then
+    load_provision_state 2>/dev/null || return
+  fi
+
+  echo ""
+  echo -e "${_RED}${_BOLD}  ──── Provision failed ────${_RESET}"
+  if [[ -n "${_SSH_FAILED_STEP}" ]]; then
+    echo -e "  Step : ${_SSH_FAILED_STEP}"
+  fi
+  echo -e "  VM is reachable at ${_CYAN}${VM_SSH_USER:-ubuntu}@${VM_IP}${_RESET}"
+  echo ""
+  echo -e "${_BOLD}  Drop into the VM to debug? [Y/n]${_RESET} "
+  read -r _answer
+  case "${_answer,,}" in
+    n|no)
+      echo "  Exiting. To SSH in manually:"
+      echo "    ssh -i ${VM_SSH_KEY:-~/.ssh/dev-env} ${VM_SSH_USER:-ubuntu}@${VM_IP}"
+      ;;
+    *)
+      echo ""
+      echo -e "${_CYAN}  Opening SSH session — type 'exit' to return.${_RESET}"
+      echo ""
+      ssh \
+        -i "${VM_SSH_KEY}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p "${VM_SSH_PORT:-22}" \
+        "${VM_SSH_USER}@${VM_IP}"
+      ;;
+  esac
+}
+
+trap '_drop_to_ssh' ERR
+
+# --------------------------------------------------------------------------- #
 # Load configuration and library modules
 # --------------------------------------------------------------------------- #
 # shellcheck source=config.env
@@ -312,6 +361,10 @@ main() {
     ssh_recovery
   fi
 
+  # From this point onward the VM is reachable over SSH.
+  # The ERR trap will offer an interactive SSH session on failure.
+  _SSH_READY=true
+
   # Wait for cloud-init to finish its first-boot work before handing off to
   # Ansible.  Without this gate, package installation and user setup may still
   # be in progress, causing Ansible tasks to fail on the first run even though
@@ -327,6 +380,7 @@ main() {
   echo -e "  [ ] Provisioning with Ansible (starting now)"
   echo ""
 
+  _SSH_FAILED_STEP="GitHub SSH key setup"
   step 6 7 "GitHub SSH key setup"
   setup_ssh_key
 
@@ -334,14 +388,23 @@ main() {
   # the GitHub connection is confirmed — before Ansible runs, so the
   # kv_backend Ansible role finds the repo already in place and the tarball
   # is ready for 'docker load'.
+  _SSH_FAILED_STEP="clone kv-backend"
   clone_kv_backend
+  _SSH_FAILED_STEP="download kv-backend assets"
   download_kv_assets
 
+  _SSH_FAILED_STEP="Provisioning VM (Ansible)"
   step 7 7 "Provisioning VM"
   run_ansible
+  _SSH_FAILED_STEP="start kv-backend services"
   start_kv_services
 
+  _SSH_FAILED_STEP="verification"
   run_verify
+
+  # All steps succeeded — clear the trap so it doesn't fire on exit.
+  trap - ERR
+  _SSH_FAILED_STEP=""
 
   _print_success
 }
