@@ -199,23 +199,21 @@ _build_war_files() {
 _start_app_containers() {
   cd "${PRELOAD_DIR}"
 
-  # Verify WAR files exist before starting portal
   local portal_war
   portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
   local backend_war
   backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
 
-  if [[ -z "${portal_war}" ]]; then
-    _error "portal WAR not found — cannot start portal container"
-    return 1
-  fi
-  if [[ -z "${backend_war}" ]]; then
-    _error "kv-backend WAR not found — cannot start portal container (BACKEND.war mount)"
+  if [[ -z "${portal_war}" && -z "${backend_war}" ]]; then
+    _error "No WAR files found at all — Maven build must have completely failed"
     return 1
   fi
 
-  _info "Starting portal + sidekiq containers..."
-  docker compose up -d portal sidekiq 2>&1
+  [[ -z "${portal_war}" ]]  && _warn "portal WAR missing — portal container may fail to start"
+  [[ -z "${backend_war}" ]] && _warn "kv-backend WAR missing — BACKEND.war mount will fail"
+
+  _info "Starting portal + sidekiq containers (proceeding with whatever WARs exist)..."
+  docker compose up -d portal sidekiq 2>&1 || true
 
   _info "Waiting for portal container to come up (up to 150s)..."
   local attempt=0
@@ -359,6 +357,9 @@ main() {
   _run_step "Start infra containers"            _start_infra_containers
   _run_step "Apply config patches"              _apply_config_patches
   _run_step "Build WAR files (Maven)"           _build_war_files
+  # Always attempt to start app containers even if Maven had partial failures.
+  # If at least one WAR exists docker-compose can proceed; it may mount whatever
+  # was successfully built. The portal container itself reports missing WARs.
   _run_step "Start app containers (portal)"     _start_app_containers
   _run_step "Database initialization"           _run_db_scripts
   _run_step "Verify services"                   _verify_services

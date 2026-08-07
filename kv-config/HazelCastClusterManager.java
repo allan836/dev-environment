@@ -76,7 +76,6 @@ public class HazelCastClusterManager extends AbstractClusterManager {
         this.instance.getMap(VERIFIED_OTP_MAP);
         this.instance.getMap(PENDING_OTP_MAP);
         this.instance.getMap(LOCKOUT_OTP_MAP);
-        this.instance.getMap(EMAIL_OTP_MAP);
 
         this.instance.getMap(LOCATION_AI_SUMMARY_MAP);
 
