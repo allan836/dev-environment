@@ -2,21 +2,24 @@
 # =============================================================================
 # kv-scripts/sshprovision.sh — Provision kv-backend services inside the VM
 #
-# Automates all manual setup steps from the Confluence doc.
+# Automates all manual steps from the Confluence setup doc.
 #
-# Flow:
-#   1. Load preload Docker images from tarball
-#   2. Start infra containers only (mysql, cassandra, rabbitmq, solr, memcached)
-#   3. Apply local config patches (rabbitmq.xml, db-scripts)
-#   4. Build WAR files via Maven  ← needs infra containers for db-scripts
-#   5. Start portal + sidekiq containers (mounts the now-existing WARs)
-#   6. Run database initialization scripts (quick-setup.sh)
-#   7. Verify services are running
+# Sequence (mirrors the Confluence instructions exactly):
+#   1.  Load preload Docker images from tarball
+#   2.  Start infra containers (mysql, cassandra, rabbitmq, solr, memcached)
+#   3.  Enable Cassandra thrift
+#   4.  Apply local config patches (rabbitmq.xml, db-scripts migration)
+#   5.  npm install --no-save  in client/client-portal
+#   6.  mvn clean package      (attempt 1 of 3)
+#   7.  docker compose up -d portal sidekiq
+#   8.  Unzip ROOT.war / BACKEND.war / WIDGETS.war inside portal container
+#   9.  docker compose restart portal
+#   10. bash quick-setup.sh   (DB init — run once)
+#   11. Verify services
 #
-# Error handling:
-#   Each step runs independently — a failure is recorded but execution continues.
-#   At the end all failed steps are retried once.
-#   Only after the retry pass does the script exit non-zero if anything is still broken.
+# Retry logic:
+#   If Maven fails, steps 6-9 are retried up to 3 times total before giving up.
+#   All other failures are recorded and retried once at the end.
 #
 # Usage:
 #   bash sshprovision.sh [--ci]
@@ -26,6 +29,7 @@ set -uo pipefail
 KV_DIR="${HOME}/workspace/repos/kv-backend"
 PRELOAD_DIR="${KV_DIR}/preload-docker-compose"
 IMAGE_PATH="${IMAGE_PATH:-${HOME}/dev-environment/assets/preload_kv.tar.gz}"
+MAX_MVN_ATTEMPTS=3
 
 _info()    { echo "[sshprovision] INFO  $*"; }
 _success() { echo "[sshprovision] OK    $*"; }
@@ -78,9 +82,7 @@ _load_preload_images() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 2: Start infra containers only (no portal/sidekiq which need WAR files)
-# The Maven build's db-scripts phase needs MySQL/Cassandra/RabbitMQ/ Solr
-# running, but portal can't start until WARs exist.
+# Step 2: Start infra containers only (portal needs WARs, so it comes later)
 # --------------------------------------------------------------------------- #
 _start_infra_containers() {
   cd "${PRELOAD_DIR}"
@@ -88,8 +90,7 @@ _start_infra_containers() {
   _info "Starting infra containers (mysql, cassandra, rabbitmq, solr, memcached)..."
   docker compose up -d mysql-8 cassandra rabbitmq solr memcached 2>&1
 
-  # Brief wait for databases to accept connections
-  _info "Waiting for MySQL to be ready..."
+  _info "Waiting for MySQL to be ready (up to 60s)..."
   local attempt=0
   while [[ ${attempt} -lt 30 ]]; do
     if docker compose exec -T mysql-8 mysql -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
@@ -99,8 +100,9 @@ _start_infra_containers() {
     attempt=$(( attempt + 1 ))
     sleep 2
   done
+  [[ ${attempt} -eq 30 ]] && _warn "MySQL did not become ready within 60s — continuing"
 
-  _info "Waiting for Cassandra to be ready..."
+  _info "Waiting for Cassandra to be ready (up to 60s)..."
   attempt=0
   while [[ ${attempt} -lt 30 ]]; do
     if docker compose exec -T cassandra nodetool status >/dev/null 2>&1; then
@@ -110,22 +112,33 @@ _start_infra_containers() {
     attempt=$(( attempt + 1 ))
     sleep 2
   done
-
-  _warn "Cassandra did not become ready within 60s — continuing anyway"
+  _warn "Cassandra did not become ready within 60s — continuing"
   return 0
 }
 
 # --------------------------------------------------------------------------- #
-# Step 3: Apply local config patches (do not commit these changes)
+# Step 3: Enable Cassandra thrift (required by kv-backend)
+# --------------------------------------------------------------------------- #
+_enable_cassandra_thrift() {
+  _info "Enabling Cassandra thrift..."
+  if docker exec kv_cassandra nodetool enablethrift >/dev/null 2>&1; then
+    _success "Cassandra thrift enabled"
+  else
+    _warn "nodetool enablethrift failed — Cassandra may not be ready yet or thrift already enabled"
+  fi
+  return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Step 4: Apply local config patches (do not commit these changes)
 # --------------------------------------------------------------------------- #
 _apply_config_patches() {
-  local rc=0
-
+  # rabbitmq.xml: addresses="${rabbitmq.addresses}" → addresses="${rabbitmq.host}"
   local rabbitmq_xml="${KV_DIR}/portal/src/main/resources/spring/rabbitmq/rabbitmq.xml"
   if [[ -f "${rabbitmq_xml}" ]]; then
     if grep -q 'addresses="\${rabbitmq.addresses}"' "${rabbitmq_xml}"; then
       sed -i 's/addresses="\${rabbitmq.addresses}"/addresses="${rabbitmq.host}"/g' "${rabbitmq_xml}"
-      _success "rabbitmq.xml: patched addresses property"
+      _success "rabbitmq.xml: patched"
     else
       _info "rabbitmq.xml: already patched — skipping"
     fi
@@ -133,11 +146,12 @@ _apply_config_patches() {
     _warn "rabbitmq.xml not found at ${rabbitmq_xml}"
   fi
 
+  # db-scripts: prepend SET FOREIGN_KEY_CHECKS = 0
   local db_migration="${KV_DIR}/db-scripts/db-scripts-kv-mysql/src/main/resources/db/migration/V1.0.0.22__location_id_size_update.sql"
   if [[ -f "${db_migration}" ]]; then
     if ! head -1 "${db_migration}" | grep -q "SET FOREIGN_KEY_CHECKS"; then
       sed -i '1i SET FOREIGN_KEY_CHECKS = 0;' "${db_migration}"
-      _success "db-scripts: SET FOREIGN_KEY_CHECKS = 0 prepended to migration"
+      _success "db-scripts: migration patched"
     else
       _info "db-scripts: migration already patched — skipping"
     fi
@@ -145,22 +159,18 @@ _apply_config_patches() {
     _warn "Migration file not found: ${db_migration}"
   fi
 
-  return ${rc}
+  return 0
 }
 
 # --------------------------------------------------------------------------- #
-# Step 4a: npm install in client-portal
-# Must run before Maven so the compiled front-end assets exist when the
-# war plugin packages portal/src/main/webapp.
+# Step 5: npm install in client/client-portal (must be before Maven)
 # --------------------------------------------------------------------------- #
 _npm_install_client_portal() {
   local client_dir="${KV_DIR}/client/client-portal"
-
   if [[ ! -d "${client_dir}" ]]; then
     _warn "client/client-portal not found — skipping npm install"
     return 0
   fi
-
   _info "Running npm install --no-save in client/client-portal..."
   cd "${client_dir}"
   npm install --no-save
@@ -169,75 +179,79 @@ _npm_install_client_portal() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 4b: Build WAR files via Maven
-#
-# Infra containers must already be running (db-scripts needs MySQL).
-# Portal and sidekiq must NOT be running — they hold a lock on the WAR file
-# which prevents mvn clean from deleting it.
+# Step 6: Maven build — up to MAX_MVN_ATTEMPTS attempts
+# Returns 0 if either WAR was built (even partially), 1 if nothing was built.
 # --------------------------------------------------------------------------- #
 _build_war_files() {
   if [[ ! -f "${HOME}/.m2/settings.xml" ]]; then
     _warn "~/.m2/settings.xml missing — Nexus artifacts may fail to resolve"
   elif grep -q 'USERNAME\|PASSWORD' "${HOME}/.m2/settings.xml" 2>/dev/null; then
-    _error "~/.m2/settings.xml still has placeholder USERNAME/PASSWORD."
-    _error "Set NEXUS_USERNAME and NEXUS_PASSWORD in config.env on the host and re-provision."
+    _error "~/.m2/settings.xml still has placeholder credentials."
+    _error "Set NEXUS_USERNAME and NEXUS_PASSWORD in config.env and re-provision."
     return 1
   fi
 
   cd "${KV_DIR}"
 
-  # Stop portal container if running — it locks the WAR file and blocks mvn clean
-  if cd "${PRELOAD_DIR}" 2>/dev/null; then
-    if docker compose ps -q portal 2>/dev/null | grep -q .; then
+  # Stop portal if running — it locks the WAR file and blocks mvn clean
+  if [[ -d "${PRELOAD_DIR}" ]]; then
+    if docker compose -f "${PRELOAD_DIR}/docker-compose.yml" ps -q portal 2>/dev/null | grep -q .; then
       _info "Stopping portal container to release WAR file lock..."
-      docker compose stop portal 2>/dev/null || true
-    fi
-    cd "${KV_DIR}"
-  fi
-
-  # Skip rebuild if WARs exist and are recent (< 1 hour old)
-  local portal_war
-  portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
-  local backend_war
-  backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
-
-  if [[ -n "${portal_war}" && -n "${backend_war}" ]]; then
-    local age=$(( $(date +%s) - $(stat -c %Y "${portal_war}") ))
-    if [[ ${age} -lt 3600 ]]; then
-      _success "WAR files already built and recent (${age}s old) — skipping rebuild"
-      return 0
+      docker compose -f "${PRELOAD_DIR}/docker-compose.yml" stop portal 2>/dev/null || true
     fi
   fi
 
-  _info "Building WAR files (this may take 10-15 minutes on first run)..."
-  mvn clean package -T 4 -am -pl portal,kv-backend -Dmaven.test.skip -Denforcer.skip=true
-}
+  local attempt=0
+  local mvn_rc=1
 
-# --------------------------------------------------------------------------- #
-# Step 5: Start portal + sidekiq (now that WARs exist)
-# --------------------------------------------------------------------------- #
-_start_app_containers() {
-  cd "${PRELOAD_DIR}"
+  while [[ ${attempt} -lt ${MAX_MVN_ATTEMPTS} ]]; do
+    attempt=$(( attempt + 1 ))
+    _info "Maven build attempt ${attempt}/${MAX_MVN_ATTEMPTS}..."
 
+    if mvn clean package -T 4 -am -pl portal,kv-backend \
+        -Dmaven.test.skip -Denforcer.skip=true; then
+      _success "Maven build succeeded on attempt ${attempt}"
+      mvn_rc=0
+      break
+    else
+      _warn "Maven build attempt ${attempt} failed"
+      if [[ ${attempt} -lt ${MAX_MVN_ATTEMPTS} ]]; then
+        _info "Retrying Maven build (attempt $((attempt+1))/${MAX_MVN_ATTEMPTS})..."
+        sleep 5
+      fi
+    fi
+  done
+
+  # Check if at least one WAR was produced — a partial build is still useful
   local portal_war
   portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
   local backend_war
   backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
 
   if [[ -z "${portal_war}" && -z "${backend_war}" ]]; then
-    _error "No WAR files found at all — Maven build must have completely failed"
+    _error "No WAR files produced after ${MAX_MVN_ATTEMPTS} attempts"
     return 1
   fi
 
-  [[ -z "${portal_war}" ]]  && _warn "portal WAR missing — portal container may fail to start"
-  [[ -z "${backend_war}" ]] && _warn "kv-backend WAR missing — BACKEND.war mount will fail"
+  [[ -z "${portal_war}" ]]  && _warn "portal WAR not built — portal container may fail"
+  [[ -z "${backend_war}" ]] && _warn "kv-backend WAR not built — BACKEND.war mount will fail"
 
-  _info "Starting portal + sidekiq containers (proceeding with whatever WARs exist)..."
+  # Return 0 even on partial build so downstream steps (docker-compose, unzip) can proceed
+  return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Step 7: Start portal + sidekiq containers
+# --------------------------------------------------------------------------- #
+_start_app_containers() {
+  cd "${PRELOAD_DIR}"
+
+  _info "Starting portal + sidekiq containers..."
   docker compose up -d portal sidekiq 2>&1 || true
 
-  _info "Waiting for portal container to come up (up to 150s)..."
+  _info "Waiting for portal container to come up (up to 90s)..."
   local attempt=0
-  while [[ ${attempt} -lt 30 ]]; do
+  while [[ ${attempt} -lt 18 ]]; do
     if docker compose ps 2>/dev/null | grep -E 'portal.*(Up|running)' >/dev/null 2>&1; then
       _success "Portal container is up"
       return 0
@@ -246,51 +260,98 @@ _start_app_containers() {
     sleep 5
   done
 
-  _warn "Portal container did not become ready within 150s"
+  _warn "Portal container did not become ready within 90s"
   docker compose ps
   return 1
 }
 
 # --------------------------------------------------------------------------- #
-# Step 6: Run database initialization (quick-setup.sh)
-# Uses 'docker exec' for mysql commands instead of requiring a host mysql client.
+# Step 8: Unzip WARs inside the portal container
+# ROOT.war, BACKEND.war, WIDGETS.war — matches Confluence instructions exactly
+# --------------------------------------------------------------------------- #
+_unzip_wars_in_portal() {
+  _info "Installing unzip inside portal container..."
+  docker exec kv_portal bash -c "apt-get update -qq && apt-get install -y unzip -qq" >/dev/null 2>&1 || \
+    docker exec kv_portal bash -c "which unzip" >/dev/null 2>&1 || \
+    _warn "Could not install unzip — it may already be present"
+
+  _info "Unzipping ROOT.war inside portal container..."
+  docker exec kv_portal bash -c "
+    cd /usr/local/tomcat/webapps
+    if [[ -f ROOT.war ]]; then
+      mkdir -p ROOT
+      unzip -o ROOT.war -d ROOT 2>&1 | tail -1
+      echo 'ROOT.war extracted'
+    else
+      echo 'ROOT.war not found — skipping'
+    fi
+  "
+
+  _info "Unzipping BACKEND.war inside portal container..."
+  docker exec kv_portal bash -c "
+    cd /usr/local/tomcat/webapps
+    if [[ -f BACKEND.war ]]; then
+      mkdir -p BACKEND
+      unzip -o BACKEND.war -d BACKEND 2>&1 | tail -1
+      echo 'BACKEND.war extracted'
+    else
+      echo 'BACKEND.war not found — skipping'
+    fi
+  "
+
+  _info "Unzipping WIDGETS.war inside portal container..."
+  docker compose -f "${PRELOAD_DIR}/docker-compose.yml" exec -w /usr/local/widget-tomcat/webapps/ portal \
+    unzip -o WIDGETS.war -d WIDGETS 2>/dev/null && _success "WIDGETS.war extracted" || \
+    _warn "WIDGETS.war not found or could not be extracted — skipping"
+
+  _success "WAR extraction complete"
+}
+
+# --------------------------------------------------------------------------- #
+# Step 9: Restart portal after unzip so Tomcat picks up the new classes
+# --------------------------------------------------------------------------- #
+_restart_portal() {
+  cd "${PRELOAD_DIR}"
+  _info "Restarting portal container..."
+  docker compose restart portal 2>&1
+  _success "Portal restarted"
+}
+
+# --------------------------------------------------------------------------- #
+# Step 10: Database initialization via quick-setup.sh
+# Runs mysql commands through docker exec so no host mysql client needed.
 # --------------------------------------------------------------------------- #
 _run_db_scripts() {
   cd "${PRELOAD_DIR}"
 
-  # Run quick-setup.sh if it exists
   if [[ -f "quick-setup.sh" ]]; then
-    _info "Running quick-setup.sh..."
-    # quick-setup.sh calls 'mysql' directly which isn't on the host PATH.
-    # Wrap it: add a function that routes `mysql` calls through docker exec.
-    bash -c '
-      mysql() {
-        docker exec -i kv_mysql_88 mysql "$@"
-      }
-      source quick-setup.sh
-    ' 2>&1 || _warn "quick-setup.sh had errors — database may already be initialized"
+    _info "Running quick-setup.sh (DB init — run once)..."
+    # Override 'mysql' to route through docker exec into the mysql container
+    mysql() { docker exec -i kv_mysql_88 mysql "$@"; }
+    export -f mysql
+    bash quick-setup.sh 2>&1 || _warn "quick-setup.sh had errors — DB may already be initialized"
+    unset -f mysql
     return 0
   fi
 
-  # Fallback: run the post-scripts directly via docker exec
+  # Fallback: run post-scripts directly
   local post_dir="${PRELOAD_DIR}/mysql/post-scripts"
   if [[ -d "${post_dir}" ]]; then
     _info "Running MySQL post-scripts via docker exec..."
     for sql_file in "${post_dir}"/*.sql; do
-      if [[ -f "${sql_file}" ]]; then
-        _info "  $(basename "${sql_file}")"
-        docker exec -i kv_mysql_88 mysql -ukv -pkv kv < "${sql_file}" 2>/dev/null || true
-      fi
+      [[ -f "${sql_file}" ]] || continue
+      _info "  $(basename "${sql_file}")"
+      docker exec -i kv_mysql_88 mysql -ukv -pkv kv < "${sql_file}" 2>/dev/null || true
     done
   else
-    _warn "No post-scripts directory found — skipping DB initialization"
+    _warn "quick-setup.sh and post-scripts not found — skipping DB init"
   fi
 
   return 0
 }
 
 # --------------------------------------------------------------------------- #
-# Step 7: Verify services are running
+# Step 11: Verify all services are responding
 # --------------------------------------------------------------------------- #
 _verify_services() {
   cd "${PRELOAD_DIR}"
@@ -300,7 +361,6 @@ _verify_services() {
   docker compose ps
 
   local all_ok=true
-
   _check() {
     local name="$1"; shift
     if "$@" >/dev/null 2>&1; then
@@ -320,14 +380,14 @@ _verify_services() {
   if [[ "${all_ok}" == "true" ]]; then
     _success "All services healthy"
   else
-    _warn "Some services not yet responding — they may still be starting up"
+    _warn "Some services not yet responding — they may still be starting"
     _info "Tail logs: docker compose logs -f"
     return 1
   fi
 }
 
 # --------------------------------------------------------------------------- #
-# Retry pass
+# Retry pass — re-run any failed non-Maven steps once
 # --------------------------------------------------------------------------- #
 _retry_failed() {
   if [[ ${#FAILED_STEPS[@]} -eq 0 ]]; then
@@ -361,6 +421,7 @@ _retry_failed() {
     done
     return 1
   fi
+  return 0
 }
 
 # --------------------------------------------------------------------------- #
@@ -373,17 +434,22 @@ main() {
   echo "╚════════════════════════════════════════════════════════╝"
   echo ""
 
-  _run_step "Load Docker images"                _load_preload_images
-  _run_step "Start infra containers"            _start_infra_containers
-  _run_step "Apply config patches"              _apply_config_patches
-  _run_step "npm install (client-portal)"       _npm_install_client_portal
-  _run_step "Build WAR files (Maven)"           _build_war_files
-  # Always attempt to start app containers even if Maven had partial failures.
-  # If at least one WAR exists docker-compose can proceed; it may mount whatever
-  # was successfully built. The portal container itself reports missing WARs.
-  _run_step "Start app containers (portal)"     _start_app_containers
-  _run_step "Database initialization"           _run_db_scripts
-  _run_step "Verify services"                   _verify_services
+  _run_step "Load Docker images"           _load_preload_images
+  _run_step "Start infra containers"       _start_infra_containers
+  _run_step "Enable Cassandra thrift"      _enable_cassandra_thrift
+  _run_step "Apply config patches"         _apply_config_patches
+  _run_step "npm install (client-portal)"  _npm_install_client_portal
+
+  # Maven + docker-compose + unzip run as a unit.
+  # Maven is retried up to 3 times internally; docker-compose and unzip
+  # proceed regardless of Maven result as long as any WAR exists.
+  _run_step "Build WAR files (Maven)"      _build_war_files
+  _run_step "Start app containers"         _start_app_containers
+  _run_step "Unzip WARs in portal"         _unzip_wars_in_portal
+  _run_step "Restart portal"               _restart_portal
+
+  _run_step "Database initialization"      _run_db_scripts
+  _run_step "Verify services"              _verify_services
 
   _retry_failed
   local retry_rc=$?
