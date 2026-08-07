@@ -149,7 +149,27 @@ _apply_config_patches() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 4: Build WAR files via Maven
+# Step 4a: npm install in client-portal
+# Must run before Maven so the compiled front-end assets exist when the
+# war plugin packages portal/src/main/webapp.
+# --------------------------------------------------------------------------- #
+_npm_install_client_portal() {
+  local client_dir="${KV_DIR}/client/client-portal"
+
+  if [[ ! -d "${client_dir}" ]]; then
+    _warn "client/client-portal not found — skipping npm install"
+    return 0
+  fi
+
+  _info "Running npm install --no-save in client/client-portal..."
+  cd "${client_dir}"
+  npm install --no-save
+  cd "${KV_DIR}"
+  _success "npm install complete"
+}
+
+# --------------------------------------------------------------------------- #
+# Step 4b: Build WAR files via Maven
 #
 # Infra containers must already be running (db-scripts needs MySQL).
 # Portal and sidekiq must NOT be running — they hold a lock on the WAR file
@@ -356,6 +376,7 @@ main() {
   _run_step "Load Docker images"                _load_preload_images
   _run_step "Start infra containers"            _start_infra_containers
   _run_step "Apply config patches"              _apply_config_patches
+  _run_step "npm install (client-portal)"       _npm_install_client_portal
   _run_step "Build WAR files (Maven)"           _build_war_files
   # Always attempt to start app containers even if Maven had partial failures.
   # If at least one WAR exists docker-compose can proceed; it may mount whatever
