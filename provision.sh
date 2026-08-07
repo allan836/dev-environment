@@ -399,6 +399,9 @@ main() {
   step 7 7 "Provisioning VM"
   run_ansible
 
+  # Prompt for Nexus credentials if not already set in config.env.
+  prompt_nexus_credentials
+
   # Apply kv-backend config after Ansible has installed all dependencies (Maven, Java, etc.)
   _SSH_FAILED_STEP="apply kv-backend local config"
   apply_kv_config

@@ -145,6 +145,44 @@ clone_kv_backend() {
 }
 
 # --------------------------------------------------------------------------- #
+# prompt_nexus_credentials
+# Interactively asks for Nexus username then password when either is not
+# already set in the environment (i.e. left blank in config.env).
+# Username is shown as typed; password is hidden (read -s).
+# --------------------------------------------------------------------------- #
+prompt_nexus_credentials() {
+  if [[ -n "${NEXUS_USERNAME:-}" && -n "${NEXUS_PASSWORD:-}" ]]; then
+    info "Nexus credentials already set — skipping prompt."
+    return 0
+  fi
+
+  echo ""
+  echo -e "${_BOLD}  ┌─────────────────────────────────────────────────────────┐${_RESET}"
+  echo -e "${_BOLD}  │           Nexus Repository Credentials Required          │${_RESET}"
+  echo -e "${_BOLD}  └─────────────────────────────────────────────────────────┘${_RESET}"
+  echo ""
+  echo -e "  These are needed to resolve internal Maven dependencies"
+  echo -e "  from ${_CYAN}nexus.cicd.nextgen-kiyoh.com${_RESET}."
+  echo -e "  Ask a fellow developer (e.g. Gerwel) if you don't have them."
+  echo ""
+
+  if [[ -z "${NEXUS_USERNAME:-}" ]]; then
+    read -rp "  Nexus username: " NEXUS_USERNAME
+    export NEXUS_USERNAME
+  fi
+
+  if [[ -z "${NEXUS_PASSWORD:-}" ]]; then
+    read -rsp "  Nexus password: " NEXUS_PASSWORD
+    export NEXUS_PASSWORD
+    echo ""   # newline after hidden input
+  fi
+
+  echo ""
+  success "Nexus credentials received."
+  echo ""
+}
+
+# --------------------------------------------------------------------------- #
 # apply_kv_config
 # Runs kv-config/apply-kv-config.sh inside the VM.
 # Copies hazelcast.xml, mail.properties, HazelCastClusterManager.java,
