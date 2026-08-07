@@ -147,7 +147,7 @@ export VM_NAME VM_CPU VM_RAM VM_DISK_GB VM_USER SKIP_ANSIBLE DEV_MODE RESUME
 export ANSIBLE_DIR LOG_FILE REPO_ROOT DEBUG
 export PROVIDER_PRIORITY ACTIVE_PROVIDER SELECTED_PROVIDER AVAILABLE_PROVIDERS
 export UBUNTU_CLOUD_IMAGE_URL UBUNTU_CLOUD_IMAGE_URL_ARM
-export KV_BACKEND_REPO KV_BACKEND_TARBALL_URL
+export KV_BACKEND_REPO KV_BACKEND_TARBALL_URL KV_BACKEND_SECRETS_URL KV_PORTAL_SECRETS_URL
 export DEV_ENV_REPO
 
 # --------------------------------------------------------------------------- #
@@ -401,6 +401,11 @@ main() {
 
   # Prompt for Nexus credentials if not already set in config.env.
   prompt_nexus_credentials
+
+  # Download secrets from S3 (if URLs set) and stage them into kv-config/
+  # before apply_kv_config copies them into the VM.
+  _SSH_FAILED_STEP="download kv-backend secrets"
+  download_kv_secrets
 
   # Apply kv-backend config after Ansible has installed all dependencies (Maven, Java, etc.)
   _SSH_FAILED_STEP="apply kv-backend local config"

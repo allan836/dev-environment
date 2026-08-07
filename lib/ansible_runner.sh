@@ -183,6 +183,73 @@ prompt_nexus_credentials() {
 }
 
 # --------------------------------------------------------------------------- #
+# download_kv_secrets
+# Downloads backend and portal secrets .properties files from S3 into
+# secrets/ on the host (git-ignored).  On subsequent runs the local files
+# are re-used so the S3 URL does not need to remain public indefinitely.
+#
+# After downloading, the files are copied into kv-config/ so that the
+# existing apply_kv_config() / apply-kv-config.sh pipeline picks them up
+# without any further changes.
+#
+# Controlled by KV_BACKEND_SECRETS_URL and KV_PORTAL_SECRETS_URL in config.env.
+# If both are empty the function is a no-op (backwards-compatible).
+# --------------------------------------------------------------------------- #
+download_kv_secrets() {
+  local secrets_dir="${REPO_ROOT}/secrets"
+  local backend_local="${secrets_dir}/backend.configuration.properties"
+  local portal_local="${secrets_dir}/portal.configuration.properties"
+
+  # Nothing configured — skip silently.
+  if [[ -z "${KV_BACKEND_SECRETS_URL:-}" && -z "${KV_PORTAL_SECRETS_URL:-}" ]]; then
+    return 0
+  fi
+
+  banner "Downloading kv-backend secrets"
+  mkdir -p "${secrets_dir}"
+
+  # ── backend ─────────────────────────────────────────────────────────── #
+  if [[ -n "${KV_BACKEND_SECRETS_URL:-}" ]]; then
+    if [[ -f "${backend_local}" ]]; then
+      info "backend.configuration.properties already present locally — skipping download."
+    else
+      info "Downloading backend secrets from S3..."
+      local dl_rc=0
+      curl -fsSL -o "${backend_local}" "${KV_BACKEND_SECRETS_URL}" || dl_rc=$?
+      if [[ ${dl_rc} -ne 0 ]]; then
+        error "Failed to download backend secrets (exit ${dl_rc})."
+        error "URL: ${KV_BACKEND_SECRETS_URL}"
+        return 1
+      fi
+      success "backend.configuration.properties downloaded."
+    fi
+    info "Copying backend secrets into kv-config/..."
+    cp "${backend_local}" "${REPO_ROOT}/kv-config/backend.configuration.properties"
+  fi
+
+  # ── portal ──────────────────────────────────────────────────────────── #
+  if [[ -n "${KV_PORTAL_SECRETS_URL:-}" ]]; then
+    if [[ -f "${portal_local}" ]]; then
+      info "portal.configuration.properties already present locally — skipping download."
+    else
+      info "Downloading portal secrets from S3..."
+      local dl_rc=0
+      curl -fsSL -o "${portal_local}" "${KV_PORTAL_SECRETS_URL}" || dl_rc=$?
+      if [[ ${dl_rc} -ne 0 ]]; then
+        error "Failed to download portal secrets (exit ${dl_rc})."
+        error "URL: ${KV_PORTAL_SECRETS_URL}"
+        return 1
+      fi
+      success "portal.configuration.properties downloaded."
+    fi
+    info "Copying portal secrets into kv-config/..."
+    cp "${portal_local}" "${REPO_ROOT}/kv-config/portal.configuration.properties"
+  fi
+
+  success "Secrets ready."
+}
+
+# --------------------------------------------------------------------------- #
 # apply_kv_config
 # Runs kv-config/apply-kv-config.sh inside the VM.
 # Copies hazelcast.xml, mail.properties, HazelCastClusterManager.java,
