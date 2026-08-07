@@ -174,25 +174,8 @@ _inject_xalan() {
   # Remove ALL existing xalan/serializer entries if there are duplicates
   if [[ "${count}" -gt 1 ]]; then
     _info "Removing ${count} duplicate xalan serializer entries from ${pom}"
-    # Use a Python one-liner to safely remove xalan dependency blocks
-    python3 << 'PYTHON_EOF'
-import re
-import sys
-pom_file = sys.argv[1]
-with open(pom_file, 'r') as f:
-    content = f.read()
-# Remove all <dependency> blocks containing xalan/serializer
-content = re.sub(
-    r'<dependency>\s*<groupId>xalan</groupId>.*?</dependency>',
-    '',
-    content,
-    flags=re.DOTALL
-)
-with open(pom_file, 'w') as f:
-    f.write(content)
-PYTHON_EOF
     python3 -c "
-import re, sys
+import re
 pom_file = '${pom}'
 with open(pom_file, 'r') as f:
     content = f.read()
