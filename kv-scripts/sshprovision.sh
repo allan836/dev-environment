@@ -386,6 +386,64 @@ _restart_portal() {
 }
 
 # --------------------------------------------------------------------------- #
+# Step 9b: Post-deploy Maven build
+# After Tomcat is running with the unzipped WARs, run Maven again to ensure
+# any classes that Tomcat loaded on startup are now in sync with a clean build.
+# Uses the same retry logic as the initial build (up to MAX_MVN_ATTEMPTS).
+# Skips if the portal has not started (no point building if Tomcat is down).
+# --------------------------------------------------------------------------- #
+_post_deploy_build() {
+  # Verify Java 17 still active (PATH export from _enforce_java_17 persists
+  # within the same shell session, but confirm before running Maven again)
+  local java_ver
+  java_ver=$(java -version 2>&1 | awk -F '"' '/version/{print $2}' | cut -d'.' -f1)
+  if [[ "${java_ver}" != "17" ]]; then
+    _warn "Java ${java_ver} active — re-enforcing Java 17 for post-deploy build"
+    _enforce_java_17 || return 1
+  fi
+
+  cd "${KV_DIR}"
+
+  # Stop portal to release WAR lock before mvn clean
+  _info "Stopping portal container before post-deploy Maven build..."
+  docker compose -f "${PRELOAD_DIR}/docker-compose.yml" stop portal 2>/dev/null || true
+
+  local attempt=0
+  while [[ ${attempt} -lt ${MAX_MVN_ATTEMPTS} ]]; do
+    attempt=$(( attempt + 1 ))
+    _info "Post-deploy Maven build attempt ${attempt}/${MAX_MVN_ATTEMPTS}..."
+
+    if mvn clean package -T 4 -am -pl portal,kv-backend \
+        -Dmaven.test.skip -Denforcer.skip=true; then
+      _success "Post-deploy Maven build succeeded on attempt ${attempt}"
+
+      # Bring portal back up with the freshly built WARs
+      _info "Restarting portal with updated WARs..."
+      cd "${PRELOAD_DIR}"
+      docker compose up -d portal 2>&1 || true
+
+      # Re-unzip so Tomcat picks up the new classes immediately
+      _unzip_wars_in_portal
+      docker compose restart portal 2>&1 || true
+      _success "Portal updated with post-deploy build"
+      return 0
+    else
+      _warn "Post-deploy Maven build attempt ${attempt} failed"
+      if [[ ${attempt} -lt ${MAX_MVN_ATTEMPTS} ]]; then
+        _info "Retrying (attempt $((attempt+1))/${MAX_MVN_ATTEMPTS})..."
+        sleep 5
+      fi
+    fi
+  done
+
+  # Even if Maven failed, bring portal back up with whatever WARs exist
+  _warn "Post-deploy Maven build did not succeed — restarting portal with previous WARs"
+  cd "${PRELOAD_DIR}"
+  docker compose up -d portal 2>&1 || true
+  return 1
+}
+
+# --------------------------------------------------------------------------- #
 # Step 10: Database initialization via quick-setup.sh
 # Runs mysql commands through docker exec so no host mysql client needed.
 # --------------------------------------------------------------------------- #
@@ -516,6 +574,7 @@ main() {
   _run_step "Start app containers"         _start_app_containers
   _run_step "Unzip WARs in portal"         _unzip_wars_in_portal
   _run_step "Restart portal"               _restart_portal
+  _run_step "Post-deploy Maven build"      _post_deploy_build
 
   _run_step "Database initialization"      _run_db_scripts
   _run_step "Verify services"              _verify_services
