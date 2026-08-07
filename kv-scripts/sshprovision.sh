@@ -452,6 +452,191 @@ _post_deploy_build() {
 }
 
 # --------------------------------------------------------------------------- #
+# Step 9c: Run alter scripts (MySQL, Cassandra, Solr)
+#
+# Must run AFTER infra containers are up and BEFORE the Maven/Tomcat build.
+# Synchronises the local database state with the latest schema changes.
+#
+# Searches kv-backend for an alterscript/ folder containing subdirs:
+#   mysql/    — .sql files executed via docker exec into kv_mysql_88
+#   cassandra/ — .cql files executed via docker exec into kv_cassandra
+#   solr/     — .json/.xml config files posted to Solr HTTP API
+#
+# Scripts are run in filename order (alphabetical = version order).
+# Already-applied scripts are skipped based on a tracking table in MySQL
+# and a tracking file for Cassandra/Solr.
+# --------------------------------------------------------------------------- #
+_run_alter_scripts() {
+  # Locate the alterscript directory — try common locations
+  local alter_dir=""
+  for candidate in \
+      "${KV_DIR}/alterscript" \
+      "${KV_DIR}/alter-scripts" \
+      "${KV_DIR}/alter_scripts" \
+      "${KV_DIR}/alterscripts" \
+      "${KV_DIR}/db-scripts/alterscript" \
+      "${KV_DIR}/db-scripts/alter-scripts" \
+      "${PRELOAD_DIR}/alterscript" \
+      "${PRELOAD_DIR}/alter-scripts"; do
+    if [[ -d "${candidate}" ]]; then
+      alter_dir="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${alter_dir}" ]]; then
+    # Try a broader search under kv-backend
+    alter_dir=$(find "${KV_DIR}" -maxdepth 3 -type d \
+      \( -iname 'alterscript' -o -iname 'alter-scripts' -o -iname 'alterscripts' \) \
+      2>/dev/null | head -1 || true)
+  fi
+
+  if [[ -z "${alter_dir}" ]]; then
+    _warn "No alterscript directory found under ${KV_DIR} — skipping alter scripts"
+    return 0
+  fi
+
+  _info "Alter scripts directory: ${alter_dir}"
+
+  # Tracking table in MySQL to avoid re-running applied scripts
+  docker exec -i kv_mysql_88 mysql -uroot -proot kv 2>/dev/null << 'TRACK_SQL'
+CREATE TABLE IF NOT EXISTS _local_alter_applied (
+  script_name VARCHAR(255) NOT NULL PRIMARY KEY,
+  applied_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+TRACK_SQL
+
+  # Cassandra / Solr tracking file (on the host side, persists across runs)
+  local track_file="${KV_DIR}/.alterscript_applied"
+  touch "${track_file}" 2>/dev/null || true
+
+  local total=0 skipped=0 applied=0 failed=0
+
+  # ── MySQL alter scripts ──────────────────────────────────────────────────
+  local mysql_dir="${alter_dir}/mysql"
+  if [[ -d "${mysql_dir}" ]]; then
+    _info "Running MySQL alter scripts from ${mysql_dir}..."
+    while IFS= read -r -d '' sql_file; do
+      local script_name
+      script_name=$(basename "${sql_file}")
+      total=$(( total + 1 ))
+
+      # Check tracking table
+      local already_applied
+      already_applied=$(docker exec -i kv_mysql_88 \
+        mysql -uroot -proot kv -sNe \
+        "SELECT COUNT(*) FROM _local_alter_applied WHERE script_name='${script_name}';" \
+        2>/dev/null || echo "0")
+
+      if [[ "${already_applied}" -gt 0 ]]; then
+        _info "  [skip] ${script_name} (already applied)"
+        skipped=$(( skipped + 1 ))
+        continue
+      fi
+
+      _info "  [run]  ${script_name}"
+      if docker exec -i kv_mysql_88 mysql -uroot -proot kv < "${sql_file}" 2>&1; then
+        docker exec -i kv_mysql_88 mysql -uroot -proot kv -e \
+          "INSERT IGNORE INTO _local_alter_applied (script_name) VALUES ('${script_name}');" \
+          >/dev/null 2>&1
+        _success "  [ok]   ${script_name}"
+        applied=$(( applied + 1 ))
+      else
+        _warn "  [fail] ${script_name} — continuing with next script"
+        failed=$(( failed + 1 ))
+      fi
+    done < <(find "${mysql_dir}" -maxdepth 2 -name '*.sql' | sort -z)
+  else
+    _info "No mysql/ subdir in ${alter_dir} — skipping MySQL alter scripts"
+  fi
+
+  # ── Cassandra alter scripts ──────────────────────────────────────────────
+  local cassandra_dir="${alter_dir}/cassandra"
+  if [[ -d "${cassandra_dir}" ]]; then
+    _info "Running Cassandra alter scripts from ${cassandra_dir}..."
+    while IFS= read -r -d '' cql_file; do
+      local script_name
+      script_name=$(basename "${cql_file}")
+      total=$(( total + 1 ))
+
+      if grep -qxF "${script_name}" "${track_file}" 2>/dev/null; then
+        _info "  [skip] ${script_name} (already applied)"
+        skipped=$(( skipped + 1 ))
+        continue
+      fi
+
+      _info "  [run]  ${script_name}"
+      if docker exec -i kv_cassandra cqlsh < "${cql_file}" 2>&1; then
+        echo "${script_name}" >> "${track_file}"
+        _success "  [ok]   ${script_name}"
+        applied=$(( applied + 1 ))
+      else
+        _warn "  [fail] ${script_name} — continuing with next script"
+        failed=$(( failed + 1 ))
+      fi
+    done < <(find "${cassandra_dir}" -maxdepth 2 -name '*.cql' | sort -z)
+  else
+    _info "No cassandra/ subdir in ${alter_dir} — skipping Cassandra alter scripts"
+  fi
+
+  # ── Solr alter scripts ───────────────────────────────────────────────────
+  local solr_dir="${alter_dir}/solr"
+  if [[ -d "${solr_dir}" ]]; then
+    _info "Running Solr alter scripts from ${solr_dir}..."
+    local solr_url="http://localhost:58983/solr"
+
+    while IFS= read -r -d '' solr_file; do
+      local script_name
+      script_name=$(basename "${solr_file}")
+      total=$(( total + 1 ))
+
+      if grep -qxF "${script_name}" "${track_file}" 2>/dev/null; then
+        _info "  [skip] ${script_name} (already applied)"
+        skipped=$(( skipped + 1 ))
+        continue
+      fi
+
+      _info "  [run]  ${script_name}"
+      local ext="${solr_file##*.}"
+      local post_rc=0
+
+      case "${ext}" in
+        json)
+          curl -sf -X POST "${solr_url}/admin/configs" \
+            -H "Content-Type: application/json" \
+            --data-binary "@${solr_file}" >/dev/null 2>&1 || post_rc=$?
+          ;;
+        xml)
+          curl -sf -X POST "${solr_url}/admin/cores" \
+            -H "Content-Type: application/xml" \
+            --data-binary "@${solr_file}" >/dev/null 2>&1 || post_rc=$?
+          ;;
+        *)
+          _warn "  [skip] ${script_name} — unknown extension .${ext}"
+          skipped=$(( skipped + 1 ))
+          continue
+          ;;
+      esac
+
+      if [[ ${post_rc} -eq 0 ]]; then
+        echo "${script_name}" >> "${track_file}"
+        _success "  [ok]   ${script_name}"
+        applied=$(( applied + 1 ))
+      else
+        _warn "  [fail] ${script_name} — continuing with next script"
+        failed=$(( failed + 1 ))
+      fi
+    done < <(find "${solr_dir}" -maxdepth 2 \( -name '*.json' -o -name '*.xml' \) | sort -z)
+  else
+    _info "No solr/ subdir in ${alter_dir} — skipping Solr alter scripts"
+  fi
+
+  echo ""
+  _info "Alter scripts summary: total=${total} applied=${applied} skipped=${skipped} failed=${failed}"
+  [[ ${failed} -gt 0 ]] && return 1 || return 0
+}
+
+# --------------------------------------------------------------------------- #
 # Step 10a: Verify MySQL has the 'kv' database and schema
 # Returns 0 if kv DB is healthy, 1 if init is needed.
 # --------------------------------------------------------------------------- #
@@ -654,6 +839,7 @@ main() {
   _run_step "Start infra containers"       _start_infra_containers
   _run_step "Enable Cassandra thrift"      _enable_cassandra_thrift
   _run_step "Apply config patches"         _apply_config_patches
+  _run_step "Run alter scripts"            _run_alter_scripts
   _run_step "Enforce Java 17"              _enforce_java_17
   _run_step "npm install (client-portal)"  _npm_install_client_portal
 
