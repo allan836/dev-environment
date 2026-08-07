@@ -174,8 +174,32 @@ _inject_xalan() {
   # Remove ALL existing xalan/serializer entries if there are duplicates
   if [[ "${count}" -gt 1 ]]; then
     _info "Removing ${count} duplicate xalan serializer entries from ${pom}"
-    # Remove the full <dependency> block for xalan/serializer
-    sed -i '/<dependency>/{ N; N; N; N; /<groupId>xalan<\/groupId>/{ N; /<\/dependency>/d; }; }' "${pom}"
+    # Use a Python one-liner to safely remove xalan dependency blocks
+    python3 << 'PYTHON_EOF'
+import re
+import sys
+pom_file = sys.argv[1]
+with open(pom_file, 'r') as f:
+    content = f.read()
+# Remove all <dependency> blocks containing xalan/serializer
+content = re.sub(
+    r'<dependency>\s*<groupId>xalan</groupId>.*?</dependency>',
+    '',
+    content,
+    flags=re.DOTALL
+)
+with open(pom_file, 'w') as f:
+    f.write(content)
+PYTHON_EOF
+    python3 -c "
+import re, sys
+pom_file = '${pom}'
+with open(pom_file, 'r') as f:
+    content = f.read()
+content = re.sub(r'<dependency>\s*<groupId>xalan</groupId>.*?</dependency>', '', content, flags=re.DOTALL)
+with open(pom_file, 'w') as f:
+    f.write(content)
+"
   fi
 
   # Check again after dedup
@@ -184,10 +208,22 @@ _inject_xalan() {
     return
   fi
 
-  # Insert before the closing </dependencies> tag
-  sed -i '0,/<\/dependencies>/{
-    s|</dependencies>|        <dependency>\n            <groupId>xalan</groupId>\n            <artifactId>serializer</artifactId>\n            <version>2.7.3</version>\n        </dependency>\n    </dependencies>|
-  }' "${pom}"
+  # Insert before the closing </dependencies> tag using a temp file
+  # This avoids sed's issues with literal \n in replacement strings
+  local temp_file
+  temp_file=$(mktemp)
+  cat > "${temp_file}" << 'XALAN_BLOCK'
+        <dependency>
+            <groupId>xalan</groupId>
+            <artifactId>serializer</artifactId>
+            <version>2.7.3</version>
+        </dependency>
+XALAN_BLOCK
+
+  # Use sed to insert the temp file content before </dependencies>
+  sed -i "/<\/dependencies>/r ${temp_file}" "${pom}"
+  rm -f "${temp_file}"
+
   _success "xalan serializer injected into ${pom}"
 }
 
