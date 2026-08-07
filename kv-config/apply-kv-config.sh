@@ -154,6 +154,7 @@ fi
 
 # --------------------------------------------------------------------------- #
 # 6. xalan serializer dependency — ensure exactly one declaration in pom.xml
+# Pass the pom path as an argument to python3 via stdin to avoid all quoting.
 # --------------------------------------------------------------------------- #
 _inject_xalan() {
   local pom="$1"
@@ -162,52 +163,50 @@ _inject_xalan() {
     return
   fi
 
-  # Count existing occurrences
   local count
-  count=$(grep -c '<groupId>xalan</groupId>' "${pom}" 2>/dev/null || echo 0)
+  count=$(grep -c '<groupId>xalan</groupId>' "${pom}" 2>/dev/null || true)
+  count="${count:-0}"
 
   if [[ "${count}" -eq 1 ]]; then
     _info "xalan serializer already present in ${pom} — skipping"
     return
   fi
 
-  # Remove ALL existing xalan/serializer entries if there are duplicates
   if [[ "${count}" -gt 1 ]]; then
     _info "Removing ${count} duplicate xalan serializer entries from ${pom}"
-    python3 -c "
-import re
-pom_file = '${pom}'
+  fi
+
+  # Use python3 reading from stdin with pom path as $1 — no quoting issues
+  python3 - "${pom}" << 'PYEOF'
+import sys, re
+
+pom_file = sys.argv[1]
 with open(pom_file, 'r') as f:
     content = f.read()
-content = re.sub(r'<dependency>\s*<groupId>xalan</groupId>.*?</dependency>', '', content, flags=re.DOTALL)
-with open(pom_file, 'w') as f:
-    f.write(content)
-"
-  fi
 
-  # Check again after dedup
-  if grep -q '<groupId>xalan</groupId>' "${pom}" 2>/dev/null; then
-    _info "xalan serializer present after dedup — skipping injection"
-    return
-  fi
+# Remove all xalan/serializer dependency blocks (handles 0, 1, or many)
+content = re.sub(
+    r'\s*<dependency>\s*<groupId>xalan</groupId>.*?</dependency>',
+    '',
+    content,
+    flags=re.DOTALL
+)
 
-  # Insert before the closing </dependencies> tag using a temp file
-  # This avoids sed's issues with literal \n in replacement strings
-  local temp_file
-  temp_file=$(mktemp)
-  cat > "${temp_file}" << 'XALAN_BLOCK'
+# Inject exactly one clean block before the first </dependencies>
+xalan_block = """
         <dependency>
             <groupId>xalan</groupId>
             <artifactId>serializer</artifactId>
             <version>2.7.3</version>
-        </dependency>
-XALAN_BLOCK
+        </dependency>"""
 
-  # Use sed to insert the temp file content before </dependencies>
-  sed -i "/<\/dependencies>/r ${temp_file}" "${pom}"
-  rm -f "${temp_file}"
+content = content.replace('</dependencies>', xalan_block + '\n    </dependencies>', 1)
 
-  _success "xalan serializer injected into ${pom}"
+with open(pom_file, 'w') as f:
+    f.write(content)
+PYEOF
+
+  _success "xalan serializer present in ${pom}"
 }
 
 _inject_xalan "${KV_DIR}/portal/pom.xml"
