@@ -163,7 +163,66 @@ _apply_config_patches() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 5: npm install in client/client-portal (must be before Maven)
+# Step 5a: Enforce Java 17 for the Maven build
+# The system may default to Java 8 (both are installed). Maven requires 17.
+# Exports JAVA_HOME and prepends Java 17's bin to PATH for this session only.
+# --------------------------------------------------------------------------- #
+_enforce_java_17() {
+  local current_version
+  current_version=$(java -version 2>&1 | awk -F '"' '/version/{print $2}' | cut -d'.' -f1)
+  _info "Current default Java version: ${current_version}"
+
+  # Find Java 17 home — try common locations
+  local java17_home=""
+  for candidate in \
+      /usr/lib/jvm/java-17-openjdk-amd64 \
+      /usr/lib/jvm/java-17-openjdk \
+      /usr/lib/jvm/temurin-17 \
+      /usr/lib/jvm/java-17; do
+    if [[ -x "${candidate}/bin/java" ]]; then
+      java17_home="${candidate}"
+      break
+    fi
+  done
+
+  # Also try update-alternatives to locate java 17
+  if [[ -z "${java17_home}" ]]; then
+    local alt
+    alt=$(update-alternatives --list java 2>/dev/null | grep -E 'java-17|17-openjdk' | head -1 || true)
+    if [[ -n "${alt}" ]]; then
+      java17_home="${alt%/bin/java}"
+    fi
+  fi
+
+  if [[ -z "${java17_home}" ]]; then
+    _error "Java 17 not found on this system. Install it with: sudo apt install openjdk-17-jdk"
+    return 1
+  fi
+
+  _info "Java 17 found at: ${java17_home}"
+
+  if [[ "${current_version}" == "17" ]]; then
+    _success "Java 17 is already the default — no switch needed"
+    export JAVA_HOME="${java17_home}"
+    return 0
+  fi
+
+  _info "Switching to Java 17 for this build session (was Java ${current_version})..."
+  export JAVA_HOME="${java17_home}"
+  export PATH="${java17_home}/bin:${PATH}"
+
+  local new_version
+  new_version=$(java -version 2>&1 | awk -F '"' '/version/{print $2}' | cut -d'.' -f1)
+  if [[ "${new_version}" == "17" ]]; then
+    _success "Java 17 active for build (JAVA_HOME=${java17_home})"
+  else
+    _error "Failed to switch to Java 17 — still on Java ${new_version}"
+    return 1
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Step 5b: npm install in client/client-portal (must be before Maven)
 # --------------------------------------------------------------------------- #
 _npm_install_client_portal() {
   local client_dir="${KV_DIR}/client/client-portal"
@@ -200,6 +259,15 @@ _build_war_files() {
       docker compose -f "${PRELOAD_DIR}/docker-compose.yml" stop portal 2>/dev/null || true
     fi
   fi
+
+  # Final Java version check before invoking Maven
+  local java_ver
+  java_ver=$(java -version 2>&1 | awk -F '"' '/version/{print $2}' | cut -d'.' -f1)
+  if [[ "${java_ver}" != "17" ]]; then
+    _error "Maven requires Java 17 but active version is Java ${java_ver}. Run 'Enforce Java 17' step first."
+    return 1
+  fi
+  _info "Java ${java_ver} confirmed — proceeding with Maven build"
 
   local attempt=0
   local mvn_rc=1
@@ -438,6 +506,7 @@ main() {
   _run_step "Start infra containers"       _start_infra_containers
   _run_step "Enable Cassandra thrift"      _enable_cassandra_thrift
   _run_step "Apply config patches"         _apply_config_patches
+  _run_step "Enforce Java 17"              _enforce_java_17
   _run_step "npm install (client-portal)"  _npm_install_client_portal
 
   # Maven + docker-compose + unzip run as a unit.
