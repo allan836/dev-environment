@@ -6,11 +6,12 @@
 #
 # Flow:
 #   1. Load preload Docker images from tarball
-#   2. Apply local config patches (rabbitmq.xml, db-scripts)
-#   3. Build WAR files via Maven  ← MUST happen before docker-compose mounts them
-#   4. Start docker-compose services
-#   5. Run database initialization scripts (quick-setup.sh)
-#   6. Verify services are running
+#   2. Start infra containers only (mysql, cassandra, rabbitmq, solr, memcached)
+#   3. Apply local config patches (rabbitmq.xml, db-scripts)
+#   4. Build WAR files via Maven  ← needs infra containers for db-scripts
+#   5. Start portal + sidekiq containers (mounts the now-existing WARs)
+#   6. Run database initialization scripts (quick-setup.sh)
+#   7. Verify services are running
 #
 # Error handling:
 #   Each step runs independently — a failure is recorded but execution continues.
@@ -20,7 +21,7 @@
 # Usage:
 #   bash sshprovision.sh [--ci]
 # =============================================================================
-set -uo pipefail   # note: no -e so each step can fail without stopping the script
+set -uo pipefail
 
 KV_DIR="${HOME}/workspace/repos/kv-backend"
 PRELOAD_DIR="${KV_DIR}/preload-docker-compose"
@@ -34,13 +35,8 @@ _error()   { echo "[sshprovision] ERROR $*" >&2; }
 CI_MODE=false
 [[ "${1:-}" == "--ci" ]] && CI_MODE=true
 
-# Track failed step names so we can retry them
 FAILED_STEPS=()
 
-# --------------------------------------------------------------------------- #
-# _run_step <name> <function>
-# Runs a function, records it in FAILED_STEPS if it fails.
-# --------------------------------------------------------------------------- #
 _run_step() {
   local name="$1"
   local func="$2"
@@ -54,9 +50,6 @@ _run_step() {
   fi
 }
 
-# --------------------------------------------------------------------------- #
-# Guard: kv-backend must be cloned
-# --------------------------------------------------------------------------- #
 if [[ ! -d "${KV_DIR}" ]]; then
   _error "kv-backend not found at ${KV_DIR}"
   exit 1
@@ -85,12 +78,49 @@ _load_preload_images() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 2: Apply local config patches (do not commit these changes)
+# Step 2: Start infra containers only (no portal/sidekiq which need WAR files)
+# The Maven build's db-scripts phase needs MySQL/Cassandra/RabbitMQ/ Solr
+# running, but portal can't start until WARs exist.
+# --------------------------------------------------------------------------- #
+_start_infra_containers() {
+  cd "${PRELOAD_DIR}"
+
+  _info "Starting infra containers (mysql, cassandra, rabbitmq, solr, memcached)..."
+  docker compose up -d mysql-8 cassandra rabbitmq solr memcached 2>&1
+
+  # Brief wait for databases to accept connections
+  _info "Waiting for MySQL to be ready..."
+  local attempt=0
+  while [[ ${attempt} -lt 30 ]]; do
+    if docker compose exec -T mysql-8 mysql -uroot -proot -e "SELECT 1" >/dev/null 2>&1; then
+      _success "MySQL is ready"
+      break
+    fi
+    attempt=$(( attempt + 1 ))
+    sleep 2
+  done
+
+  _info "Waiting for Cassandra to be ready..."
+  attempt=0
+  while [[ ${attempt} -lt 30 ]]; do
+    if docker compose exec -T cassandra nodetool status >/dev/null 2>&1; then
+      _success "Cassandra is ready"
+      return 0
+    fi
+    attempt=$(( attempt + 1 ))
+    sleep 2
+  done
+
+  _warn "Cassandra did not become ready within 60s — continuing anyway"
+  return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Step 3: Apply local config patches (do not commit these changes)
 # --------------------------------------------------------------------------- #
 _apply_config_patches() {
   local rc=0
 
-  # rabbitmq.xml: addresses="${rabbitmq.addresses}" → addresses="${rabbitmq.host}"
   local rabbitmq_xml="${KV_DIR}/portal/src/main/resources/spring/rabbitmq/rabbitmq.xml"
   if [[ -f "${rabbitmq_xml}" ]]; then
     if grep -q 'addresses="\${rabbitmq.addresses}"' "${rabbitmq_xml}"; then
@@ -103,7 +133,6 @@ _apply_config_patches() {
     _warn "rabbitmq.xml not found at ${rabbitmq_xml}"
   fi
 
-  # db-scripts: prepend SET FOREIGN_KEY_CHECKS = 0; to migration file
   local db_migration="${KV_DIR}/db-scripts/db-scripts-kv-mysql/src/main/resources/db/migration/V1.0.0.22__location_id_size_update.sql"
   if [[ -f "${db_migration}" ]]; then
     if ! head -1 "${db_migration}" | grep -q "SET FOREIGN_KEY_CHECKS"; then
@@ -120,14 +149,13 @@ _apply_config_patches() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 3: Build WAR files via Maven
+# Step 4: Build WAR files via Maven
 #
-# Must happen BEFORE docker-compose starts. The compose file mounts WAR paths:
-#   kv-backend/target/kv-backend-*.war → /usr/local/tomcat/webapps/BACKEND.war
-# If the file doesn't exist docker will fail with "not a directory" error.
+# Infra containers must already be running (db-scripts needs MySQL).
+# Portal and sidekiq must NOT be running — they hold a lock on the WAR file
+# which prevents mvn clean from deleting it.
 # --------------------------------------------------------------------------- #
 _build_war_files() {
-  # Diagnose common Maven failures before starting
   if [[ ! -f "${HOME}/.m2/settings.xml" ]]; then
     _warn "~/.m2/settings.xml missing — Nexus artifacts may fail to resolve"
   elif grep -q 'USERNAME\|PASSWORD' "${HOME}/.m2/settings.xml" 2>/dev/null; then
@@ -137,6 +165,15 @@ _build_war_files() {
   fi
 
   cd "${KV_DIR}"
+
+  # Stop portal container if running — it locks the WAR file and blocks mvn clean
+  if cd "${PRELOAD_DIR}" 2>/dev/null; then
+    if docker compose ps -q portal 2>/dev/null | grep -q .; then
+      _info "Stopping portal container to release WAR file lock..."
+      docker compose stop portal 2>/dev/null || true
+    fi
+    cd "${KV_DIR}"
+  fi
 
   # Skip rebuild if WARs exist and are recent (< 1 hour old)
   local portal_war
@@ -157,19 +194,33 @@ _build_war_files() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 4: Start docker-compose services
+# Step 5: Start portal + sidekiq (now that WARs exist)
 # --------------------------------------------------------------------------- #
-_start_docker_compose() {
+_start_app_containers() {
   cd "${PRELOAD_DIR}"
 
-  _info "Starting docker-compose services..."
-  docker compose up -d
+  # Verify WAR files exist before starting portal
+  local portal_war
+  portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
+  local backend_war
+  backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
+
+  if [[ -z "${portal_war}" ]]; then
+    _error "portal WAR not found — cannot start portal container"
+    return 1
+  fi
+  if [[ -z "${backend_war}" ]]; then
+    _error "kv-backend WAR not found — cannot start portal container (BACKEND.war mount)"
+    return 1
+  fi
+
+  _info "Starting portal + sidekiq containers..."
+  docker compose up -d portal sidekiq 2>&1
 
   _info "Waiting for portal container to come up (up to 150s)..."
   local attempt=0
   while [[ ${attempt} -lt 30 ]]; do
-    if docker compose ps --format json 2>/dev/null | grep -q '"portal"' || \
-       docker compose ps 2>/dev/null | grep -E 'portal.*(Up|running)' >/dev/null 2>&1; then
+    if docker compose ps 2>/dev/null | grep -E 'portal.*(Up|running)' >/dev/null 2>&1; then
       _success "Portal container is up"
       return 0
     fi
@@ -183,22 +234,45 @@ _start_docker_compose() {
 }
 
 # --------------------------------------------------------------------------- #
-# Step 5: Run database initialization (quick-setup.sh)
+# Step 6: Run database initialization (quick-setup.sh)
+# Uses 'docker exec' for mysql commands instead of requiring a host mysql client.
 # --------------------------------------------------------------------------- #
 _run_db_scripts() {
   cd "${PRELOAD_DIR}"
 
-  if [[ ! -f "quick-setup.sh" ]]; then
-    _warn "quick-setup.sh not found in ${PRELOAD_DIR} — skipping DB init"
+  # Run quick-setup.sh if it exists
+  if [[ -f "quick-setup.sh" ]]; then
+    _info "Running quick-setup.sh..."
+    # quick-setup.sh calls 'mysql' directly which isn't on the host PATH.
+    # Wrap it: add a function that routes `mysql` calls through docker exec.
+    bash -c '
+      mysql() {
+        docker exec -i kv_mysql_88 mysql "$@"
+      }
+      source quick-setup.sh
+    ' 2>&1 || _warn "quick-setup.sh had errors — database may already be initialized"
     return 0
   fi
 
-  _info "Running quick-setup.sh..."
-  bash quick-setup.sh
+  # Fallback: run the post-scripts directly via docker exec
+  local post_dir="${PRELOAD_DIR}/mysql/post-scripts"
+  if [[ -d "${post_dir}" ]]; then
+    _info "Running MySQL post-scripts via docker exec..."
+    for sql_file in "${post_dir}"/*.sql; do
+      if [[ -f "${sql_file}" ]]; then
+        _info "  $(basename "${sql_file}")"
+        docker exec -i kv_mysql_88 mysql -ukv -pkv kv < "${sql_file}" 2>/dev/null || true
+      fi
+    done
+  else
+    _warn "No post-scripts directory found — skipping DB initialization"
+  fi
+
+  return 0
 }
 
 # --------------------------------------------------------------------------- #
-# Step 6: Verify services are running
+# Step 7: Verify services are running
 # --------------------------------------------------------------------------- #
 _verify_services() {
   cd "${PRELOAD_DIR}"
@@ -219,11 +293,11 @@ _verify_services() {
     fi
   }
 
-  _check "MySQL"    docker compose exec -T mysql-8   mysql -uroot -proot -e "SELECT 1"
-  _check "RabbitMQ" docker compose exec -T rabbitmq  rabbitmq-diagnostics -q ping
+  _check "MySQL"     docker compose exec -T mysql-8   mysql -uroot -proot -e "SELECT 1"
+  _check "RabbitMQ"  docker compose exec -T rabbitmq  rabbitmq-diagnostics -q ping
   _check "Cassandra" docker compose exec -T cassandra nodetool status
-  _check "Solr"     curl -sf http://localhost:58983/solr/admin/cores
-  _check "Portal"   curl -sf http://localhost:8080/admin/login.html
+  _check "Solr"      curl -sf http://localhost:58983/solr/admin/cores
+  _check "Portal"    curl -sf http://localhost:8080/admin/login.html
 
   if [[ "${all_ok}" == "true" ]]; then
     _success "All services healthy"
@@ -235,7 +309,7 @@ _verify_services() {
 }
 
 # --------------------------------------------------------------------------- #
-# Retry pass — run any failed steps once more
+# Retry pass
 # --------------------------------------------------------------------------- #
 _retry_failed() {
   if [[ ${#FAILED_STEPS[@]} -eq 0 ]]; then
@@ -281,12 +355,13 @@ main() {
   echo "╚════════════════════════════════════════════════════════╝"
   echo ""
 
-  _run_step "Load Docker images"        _load_preload_images
-  _run_step "Apply config patches"      _apply_config_patches
-  _run_step "Build WAR files (Maven)"   _build_war_files
-  _run_step "Start docker-compose"      _start_docker_compose
-  _run_step "Database initialization"   _run_db_scripts
-  _run_step "Verify services"           _verify_services
+  _run_step "Load Docker images"                _load_preload_images
+  _run_step "Start infra containers"            _start_infra_containers
+  _run_step "Apply config patches"              _apply_config_patches
+  _run_step "Build WAR files (Maven)"           _build_war_files
+  _run_step "Start app containers (portal)"     _start_app_containers
+  _run_step "Database initialization"           _run_db_scripts
+  _run_step "Verify services"                   _verify_services
 
   _retry_failed
   local retry_rc=$?

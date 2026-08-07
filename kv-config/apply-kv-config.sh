@@ -153,22 +153,41 @@ else
 fi
 
 # --------------------------------------------------------------------------- #
-# 6. xalan serializer dependency — inject into pom.xml files if missing
+# 6. xalan serializer dependency — ensure exactly one declaration in pom.xml
 # --------------------------------------------------------------------------- #
-XALAN_SNIPPET='        <dependency>\n            <groupId>xalan</groupId>\n            <artifactId>serializer</artifactId>\n            <version>2.7.3</version>\n        </dependency>'
-
 _inject_xalan() {
   local pom="$1"
   if [[ ! -f "${pom}" ]]; then
     _warn "pom.xml not found: ${pom}"
     return
   fi
-  if grep -q "xalan.*serializer\|serializer.*xalan" "${pom}"; then
+
+  # Count existing occurrences
+  local count
+  count=$(grep -c '<groupId>xalan</groupId>' "${pom}" 2>/dev/null || echo 0)
+
+  if [[ "${count}" -eq 1 ]]; then
     _info "xalan serializer already present in ${pom} — skipping"
     return
   fi
+
+  # Remove ALL existing xalan/serializer entries if there are duplicates
+  if [[ "${count}" -gt 1 ]]; then
+    _info "Removing ${count} duplicate xalan serializer entries from ${pom}"
+    # Remove the full <dependency> block for xalan/serializer
+    sed -i '/<dependency>/{ N; N; N; N; /<groupId>xalan<\/groupId>/{ N; /<\/dependency>/d; }; }' "${pom}"
+  fi
+
+  # Check again after dedup
+  if grep -q '<groupId>xalan</groupId>' "${pom}" 2>/dev/null; then
+    _info "xalan serializer present after dedup — skipping injection"
+    return
+  fi
+
   # Insert before the closing </dependencies> tag
-  sed -i "0,/<\/dependencies>/{s|</dependencies>|${XALAN_SNIPPET}\n    </dependencies>|}" "${pom}"
+  sed -i '0,/<\/dependencies>/{
+    s|</dependencies>|        <dependency>\n            <groupId>xalan</groupId>\n            <artifactId>serializer</artifactId>\n            <version>2.7.3</version>\n        </dependency>\n    </dependencies>|
+  }' "${pom}"
   _success "xalan serializer injected into ${pom}"
 }
 
