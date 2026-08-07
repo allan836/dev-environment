@@ -133,14 +133,22 @@ _enable_cassandra_thrift() {
 # Step 4: Apply local config patches (do not commit these changes)
 # --------------------------------------------------------------------------- #
 _apply_config_patches() {
-  # rabbitmq.xml: addresses="${rabbitmq.addresses}" → addresses="${rabbitmq.host}"
+  # rabbitmq.xml patch 1 — line 17: addresses="${rabbitmq.addresses}" → addresses="${rabbitmq.host}"
   local rabbitmq_xml="${KV_DIR}/portal/src/main/resources/spring/rabbitmq/rabbitmq.xml"
   if [[ -f "${rabbitmq_xml}" ]]; then
     if grep -q 'addresses="\${rabbitmq.addresses}"' "${rabbitmq_xml}"; then
       sed -i 's/addresses="\${rabbitmq.addresses}"/addresses="${rabbitmq.host}"/g' "${rabbitmq_xml}"
-      _success "rabbitmq.xml: patched"
+      _success "rabbitmq.xml: patched addresses property (line 17)"
     else
-      _info "rabbitmq.xml: already patched — skipping"
+      _info "rabbitmq.xml: addresses property already patched — skipping"
+    fi
+
+    # rabbitmq.xml patch 2 — line 41: rabbitmq.admin.addresses → rabbitmq.host
+    if grep -q 'rabbitmq\.admin\.addresses' "${rabbitmq_xml}"; then
+      sed -i 's/\${rabbitmq\.admin\.addresses}/${rabbitmq.host}/g' "${rabbitmq_xml}"
+      _success "rabbitmq.xml: patched admin.addresses property (line 41)"
+    else
+      _info "rabbitmq.xml: admin.addresses property already patched — skipping"
     fi
   else
     _warn "rabbitmq.xml not found at ${rabbitmq_xml}"
@@ -444,15 +452,97 @@ _post_deploy_build() {
 }
 
 # --------------------------------------------------------------------------- #
+# Step 10a: Verify MySQL has the 'kv' database and schema
+# Returns 0 if kv DB is healthy, 1 if init is needed.
+# --------------------------------------------------------------------------- #
+_mysql_kv_db_healthy() {
+  # Check if schema_version table exists (created by Flyway during init)
+  docker exec -i kv_mysql_88 \
+    mysql -uroot -proot kv -e "SELECT 1 FROM schema_version LIMIT 1;" >/dev/null 2>&1
+}
+
+# --------------------------------------------------------------------------- #
+# Step 10b: MySQL troubleshoot recovery
+# Implements both options from the Confluence troubleshooting section:
+#   Option 1: docker exec → bash 00-mysql-init.sh inside container
+#   Option 2: docker compose down + volume rm + docker compose up (last resort)
+# --------------------------------------------------------------------------- #
+_recover_mysql() {
+  _warn "MySQL 'kv' database not initialised — running recovery..."
+
+  # Option 1: exec into container and run the init script directly
+  _info "MySQL recovery Option 1: running 00-mysql-init.sh inside container..."
+  if docker exec kv_mysql_88 bash -c "
+    cd /docker-entrypoint-initdb.d/ && \
+    bash 00-mysql-init.sh 2>&1
+  "; then
+    _success "00-mysql-init.sh completed"
+
+    # Optional SQL imports if init script alone isn't enough
+    for sql_file in 01-create-database.sql 02-kv_local.sql; do
+      local sql_path="/docker-entrypoint-initdb.d/${sql_file}"
+      if docker exec kv_mysql_88 bash -c "[[ -f '${sql_path}' ]]" 2>/dev/null; then
+        _info "Importing ${sql_file}..."
+        docker exec kv_mysql_88 bash -c \
+          "mysql -uroot -proot kv < ${sql_path}" 2>&1 || \
+          _warn "${sql_file} import had errors — may already be applied"
+      fi
+    done
+
+    # Verify recovery worked
+    if _mysql_kv_db_healthy; then
+      _success "MySQL recovery Option 1 succeeded — 'kv' database is ready"
+      return 0
+    fi
+    _warn "Option 1 complete but 'kv' database still not healthy"
+  else
+    _warn "00-mysql-init.sh failed — escalating to Option 2"
+  fi
+
+  # Option 2: destroy volume and recreate (last resort — DELETES local data)
+  _warn "MySQL recovery Option 2: destroying volume and recreating mysql-8..."
+  _warn "⚠  THIS WILL DELETE ALL LOCAL MYSQL DATA ⚠"
+  cd "${PRELOAD_DIR}"
+  docker compose down mysql-8 2>&1 || true
+  docker volume rm preload-docker-compose_kv_mysql8_data 2>&1 || \
+    _warn "Volume not found or already removed"
+  docker compose up -d mysql-8 2>&1
+
+  _info "Waiting for MySQL to reinitialise (up to 90s)..."
+  local attempt=0
+  while [[ ${attempt} -lt 45 ]]; do
+    if _mysql_kv_db_healthy; then
+      _success "MySQL recovery Option 2 succeeded — 'kv' database is ready"
+      return 0
+    fi
+    attempt=$(( attempt + 1 ))
+    sleep 2
+  done
+
+  _error "MySQL recovery failed after both options — manual intervention required"
+  _error "Check logs: docker compose logs mysql-8"
+  return 1
+}
+
+# --------------------------------------------------------------------------- #
 # Step 10: Database initialization via quick-setup.sh
 # Runs mysql commands through docker exec so no host mysql client needed.
+# If 'kv' DB is missing or schema_version is absent, triggers recovery first.
 # --------------------------------------------------------------------------- #
 _run_db_scripts() {
   cd "${PRELOAD_DIR}"
 
+  # Check if kv DB already initialised — skip if healthy to avoid re-running
+  if _mysql_kv_db_healthy; then
+    _info "MySQL 'kv' database already initialised — skipping DB init"
+    return 0
+  fi
+
+  # Attempt recovery if DB is not ready
+  _recover_mysql || return 1
+
   if [[ -f "quick-setup.sh" ]]; then
     _info "Running quick-setup.sh (DB init — run once)..."
-    # Override 'mysql' to route through docker exec into the mysql container
     mysql() { docker exec -i kv_mysql_88 mysql "$@"; }
     export -f mysql
     bash quick-setup.sh 2>&1 || _warn "quick-setup.sh had errors — DB may already be initialized"
@@ -460,7 +550,7 @@ _run_db_scripts() {
     return 0
   fi
 
-  # Fallback: run post-scripts directly
+  # Fallback: run post-scripts directly via docker exec
   local post_dir="${PRELOAD_DIR}/mysql/post-scripts"
   if [[ -d "${post_dir}" ]]; then
     _info "Running MySQL post-scripts via docker exec..."
