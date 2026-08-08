@@ -373,6 +373,10 @@ wait_for_cloud_init() {
         success "Cloud-init: first boot complete. Guest is ready for provisioning."
         return 0
         ;;
+      *"status: disabled"*)
+        info "  Cloud-init is disabled in this image — skipping first-boot readiness check."
+        return 0
+        ;;
       *"status: error"*)
         warn "Cloud-init finished with errors: ${ci_status}"
         warn "Provisioning will continue — investigate /var/log/cloud-init-output.log inside the VM."
