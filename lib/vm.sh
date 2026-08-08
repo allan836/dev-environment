@@ -357,6 +357,8 @@ wait_for_cloud_init() {
   # Gracefully skip if cloud-init is not present in the guest image.
   if ! vm_exec "command -v cloud-init" &>/dev/null; then
     warn "cloud-init not found in VM — skipping first-boot readiness check."
+    CLOUD_INIT_RESULT="not present"
+    export CLOUD_INIT_RESULT
     return 0
   fi
 
@@ -371,15 +373,21 @@ wait_for_cloud_init() {
     case "${ci_status}" in
       *"status: done"*)
         success "Cloud-init: first boot complete. Guest is ready for provisioning."
+        CLOUD_INIT_RESULT="done"
+        export CLOUD_INIT_RESULT
         return 0
         ;;
       *"status: disabled"*)
         info "  Cloud-init is disabled in this image — skipping first-boot readiness check."
+        CLOUD_INIT_RESULT="disabled"
+        export CLOUD_INIT_RESULT
         return 0
         ;;
       *"status: error"*)
         warn "Cloud-init finished with errors: ${ci_status}"
         warn "Provisioning will continue — investigate /var/log/cloud-init-output.log inside the VM."
+        CLOUD_INIT_RESULT="error"
+        export CLOUD_INIT_RESULT
         return 0
         ;;
       *"status: running"*)
@@ -400,6 +408,8 @@ wait_for_cloud_init() {
   warn "Cloud-init did not finish within ${max_wait}s — proceeding with Ansible anyway."
   warn "If Ansible fails, inspect cloud-init logs inside the VM:"
   warn "  ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP} 'sudo cloud-init status; sudo tail -50 /var/log/cloud-init-output.log'"
+  CLOUD_INIT_RESULT="timed out"
+  export CLOUD_INIT_RESULT
   return 0
 }
 

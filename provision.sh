@@ -465,7 +465,23 @@ main() {
     echo -e "  [${_GREEN}✓${_RESET}] VM created  — ${ACTIVE_PROVIDER}  |  VM_USER: ${VM_USER}"
     echo -e "  [${_GREEN}✓${_RESET}] Guest running  |  IP: ${VM_IP}"
     echo -e "  [${_GREEN}✓${_RESET}] SSH available  |  ${VM_SSH_USER}@${VM_IP}:${VM_SSH_PORT:-22}"
-    echo -e "  [${_GREEN}✓${_RESET}] Cloud-init first boot complete"
+    case "${CLOUD_INIT_RESULT:-}" in
+      done)
+        echo -e "  [${_GREEN}✓${_RESET}] Cloud-init first boot complete"
+        ;;
+      disabled)
+        echo -e "  [${_GREEN}✓${_RESET}] Cloud-init disabled in this image — VM already fully provisioned"
+        ;;
+      error)
+        echo -e "  [${_YELLOW}!${_RESET}] Cloud-init finished with errors — check /var/log/cloud-init-output.log in VM"
+        ;;
+      "timed out")
+        echo -e "  [${_YELLOW}!${_RESET}] Cloud-init timed out after 300s — proceeding anyway"
+        ;;
+      *)
+        echo -e "  [${_GREEN}✓${_RESET}] Cloud-init check passed"
+        ;;
+    esac
     echo -e "  [ ] Provisioning with Ansible (starting now)"
     echo ""
   fi
