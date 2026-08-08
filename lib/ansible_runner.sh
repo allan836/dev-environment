@@ -419,6 +419,23 @@ _push_kv_env() {
     fi
   " 2>/dev/null || echo no)"
 
+  # If the VM .env exists but NEXUS_USERNAME is blank, and we already collected
+  # credentials via prompt_nexus_credentials, write them in now so the remote
+  # check passes without needing a separate host-side file.
+  if [[ "${remote_has_env}" == "no" && -n "${NEXUS_USERNAME:-}" && -n "${NEXUS_PASSWORD:-}" ]]; then
+    info "Writing Nexus credentials into VM .env..."
+    vm_exec "
+      f=\$HOME/workspace/repos/kv-backend/preload-docker-compose/.env
+      if [[ -f \"\$f\" ]]; then
+        sed -i 's|^NEXUS_USERNAME=.*|NEXUS_USERNAME=${NEXUS_USERNAME}|' \"\$f\"
+        sed -i 's|^NEXUS_PASSWORD=.*|NEXUS_PASSWORD=${NEXUS_PASSWORD}|' \"\$f\"
+        grep -q '^NEXUS_USERNAME=' \"\$f\" || echo 'NEXUS_USERNAME=${NEXUS_USERNAME}' >> \"\$f\"
+        grep -q '^NEXUS_PASSWORD=' \"\$f\" || echo 'NEXUS_PASSWORD=${NEXUS_PASSWORD}' >> \"\$f\"
+      fi
+    " 2>&1 | tee -a "${LOG_FILE}"
+    remote_has_env="yes"
+  fi
+
   if [[ "${remote_has_env}" == "yes" ]]; then
     info "VM already has a valid kv-backend .env — skipping push."
     return 0
