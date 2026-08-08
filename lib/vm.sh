@@ -48,8 +48,14 @@ ensure_host_ssh_key() {
 # --------------------------------------------------------------------------- #
 # vm_exec <command ...>
 # Runs a command inside the VM via SSH.
+# In native mode (NATIVE_HOST=true) the "VM" is the host itself — commands
+# are executed directly via bash without any SSH hop.
 # --------------------------------------------------------------------------- #
 vm_exec() {
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    bash -c "$*"
+    return
+  fi
   ssh \
     -i "${VM_SSH_KEY}" \
     -o StrictHostKeyChecking=no \
@@ -62,8 +68,13 @@ vm_exec() {
 # --------------------------------------------------------------------------- #
 # vm_push <local_path> <remote_path>
 # Copies a file from the host into the VM.
+# In native mode the destination is on the same filesystem — use cp.
 # --------------------------------------------------------------------------- #
 vm_push() {
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    cp "$1" "$2"
+    return
+  fi
   scp \
     -i "${VM_SSH_KEY}" \
     -o StrictHostKeyChecking=no \
@@ -78,8 +89,14 @@ vm_push() {
 # the VM has a proper git checkout pointing to the company repo.
 # If the directory already exists and is a git repo, skips the clone.
 # Falls back to rsync if DEV_ENV_REPO is unset or the clone fails.
+# In native mode the repo is already present on this machine — skip entirely.
 # --------------------------------------------------------------------------- #
 vm_sync_repo() {
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    info "Native mode — dev-environment repo already on host, skipping sync."
+    return 0
+  fi
+
   local repo="${DEV_ENV_REPO:-}"
   local vm_dir="/home/${VM_SSH_USER}/dev-environment"
 

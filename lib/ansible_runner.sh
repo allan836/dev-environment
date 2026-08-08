@@ -72,31 +72,55 @@ run_ansible() {
   info "Running Ansible playbook (installs all developer tools)..."
   info "This typically takes 10–20 minutes on first run."
 
-  local inventory="${VM_SSH_USER}@${VM_IP},"
-  local ssh_args; ssh_args="$(_build_ssh_args)"
+  local rc=0
 
-  # dev_user is the VM-side user that owns the developer toolchain.
-  # VM_USER is always "ubuntu" — it is never derived from the host environment.
-  ANSIBLE_HOST_KEY_CHECKING=False \
-  ansible-playbook \
-    -i "${inventory}" \
-    --private-key "${VM_SSH_KEY}" \
-    --user "${VM_SSH_USER}" \
-    --ssh-extra-args "${ssh_args}" \
-    --extra-vars "dev_user=${VM_USER}" \
-    "${ANSIBLE_DIR}/playbook.yml" \
-    2>&1 | tee -a "$LOG_FILE"
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    # Native mode: no VM — run the playbook against localhost using a local
+    # connection (no SSH needed, no key required).
+    info "Native mode: running Ansible with local connection against localhost."
+    ANSIBLE_HOST_KEY_CHECKING=False \
+    ansible-playbook \
+      -i "localhost," \
+      -c local \
+      --extra-vars "dev_user=${VM_USER}" \
+      "${ANSIBLE_DIR}/playbook.yml" \
+      2>&1 | tee -a "$LOG_FILE"
+    rc=${PIPESTATUS[0]}
+    if [[ $rc -ne 0 ]]; then
+      error "Ansible playbook exited with code ${rc}."
+      error "  Full output: ${LOG_FILE}"
+      error "  To retry:"
+      error "    ansible-playbook -i 'localhost,' -c local \\"
+      error "      --extra-vars 'dev_user=${VM_USER}' \\"
+      error "      ${ANSIBLE_DIR}/playbook.yml"
+      return 1
+    fi
+  else
+    local inventory="${VM_SSH_USER}@${VM_IP},"
+    local ssh_args; ssh_args="$(_build_ssh_args)"
 
-  local rc=${PIPESTATUS[0]}
-  if [[ $rc -ne 0 ]]; then
-    error "Ansible playbook exited with code ${rc}."
-    error "  Full output: ${LOG_FILE}"
-    error "  To retry:"
-    error "    ansible-playbook -i '${VM_SSH_USER}@${VM_IP},' \\"
-    error "      --private-key ${VM_SSH_KEY} \\"
-    error "      --extra-vars 'dev_user=${VM_USER}' \\"
-    error "      ${ANSIBLE_DIR}/playbook.yml"
-    return 1
+    # dev_user is the VM-side user that owns the developer toolchain.
+    # VM_USER is always "ubuntu" — it is never derived from the host environment.
+    ANSIBLE_HOST_KEY_CHECKING=False \
+    ansible-playbook \
+      -i "${inventory}" \
+      --private-key "${VM_SSH_KEY}" \
+      --user "${VM_SSH_USER}" \
+      --ssh-extra-args "${ssh_args}" \
+      --extra-vars "dev_user=${VM_USER}" \
+      "${ANSIBLE_DIR}/playbook.yml" \
+      2>&1 | tee -a "$LOG_FILE"
+    rc=${PIPESTATUS[0]}
+    if [[ $rc -ne 0 ]]; then
+      error "Ansible playbook exited with code ${rc}."
+      error "  Full output: ${LOG_FILE}"
+      error "  To retry:"
+      error "    ansible-playbook -i '${VM_SSH_USER}@${VM_IP},' \\"
+      error "      --private-key ${VM_SSH_KEY} \\"
+      error "      --extra-vars 'dev_user=${VM_USER}' \\"
+      error "      ${ANSIBLE_DIR}/playbook.yml"
+      return 1
+    fi
   fi
 
   success "Ansible provisioning complete."
@@ -484,7 +508,7 @@ start_kv_services() {
     chmod +x \"\$SCRIPT\"
     cd \"\$(dirname \"\$SCRIPT\")\"
     IMAGE_PATH=\$HOME/dev-environment/assets/preload_kv.tar.gz \
-      bash \"\$SCRIPT\" --ci 2>&1
+      bash \"\$SCRIPT\" --ci --skip-vpn 2>&1
   " 2>&1 | tee -a "$LOG_FILE"
 
   local rc=${PIPESTATUS[0]}
@@ -494,7 +518,8 @@ start_kv_services() {
     error "  To retry inside the VM:"
     error "    ssh -i ~/.ssh/dev-env ${VM_SSH_USER}@${VM_IP}"
     error "    cd ~/workspace/repos/kv-backend/preload-docker-compose"
-    error "    ./sshprovision.sh"
+    error "    ./sshprovision.sh --skip-vpn"
+    error "  (VPN is managed on the host — pass --skip-vpn to avoid in-VM VPN prompts)"
     return 1
   fi
 

@@ -35,6 +35,11 @@ detect_host_os() {
                            HOST_OS="rhel";         PKG_MANAGER="dnf" ;;
       *)                   HOST_OS="linux_generic"; PKG_MANAGER="unknown" ;;
     esac
+    # Capture the Ubuntu/Debian release codename (e.g. "noble", "jammy").
+    # Used by _check_native_mode in provision.sh to detect when the host is
+    # the same Ubuntu image that would be booted inside the VM.
+    HOST_UBUNTU_CODENAME="${VERSION_CODENAME:-}"
+    export HOST_UBUNTU_CODENAME
   else
     HOST_OS="unknown"
     PKG_MANAGER="unknown"

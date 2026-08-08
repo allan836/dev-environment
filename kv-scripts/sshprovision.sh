@@ -37,7 +37,14 @@ _warn()    { echo "[sshprovision] WARN  $*"; }
 _error()   { echo "[sshprovision] ERROR $*" >&2; }
 
 CI_MODE=false
-[[ "${1:-}" == "--ci" ]] && CI_MODE=true
+SKIP_VPN=false
+for _arg in "$@"; do
+  case "${_arg}" in
+    --ci)        CI_MODE=true  ;;
+    --skip-vpn)  SKIP_VPN=true ;;
+  esac
+done
+unset _arg
 
 FAILED_STEPS=()
 
@@ -79,6 +86,14 @@ VPN_CONFIG="${HOME}/.config/openfortivpn/config"
 #   - ${VPN_CONFIG} does not exist AND running in --ci mode (non-interactive)
 # --------------------------------------------------------------------------- #
 _connect_vpn() {
+  # --skip-vpn: VPN is managed on the host machine (provision.sh step 2).
+  # The VM routes through the host gateway via NAT and inherits VPN routes
+  # on ppp0 automatically — no tunnel is needed inside this machine.
+  if [[ "${SKIP_VPN:-false}" == "true" ]]; then
+    _info "VPN managed on host — skipping in-VM VPN setup (--skip-vpn)"
+    return 0
+  fi
+
   # Already connected — nothing to do
   if ip link show ppp0 >/dev/null 2>&1; then
     _success "VPN already connected (ppp0 up)"

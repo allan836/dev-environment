@@ -2,20 +2,243 @@
 # =============================================================================
 # lib/vpn.sh — FortiVPN (openfortivpn) setup and connect helper
 #
-# Manages the lifecycle of an openfortivpn tunnel inside the VM so that
-# Docker can reach private registries (kv_cassandra, etc.) during provisioning.
+# Two entry points:
 #
-# Behaviour:
-#   First run  — prompts for password (saved to ~/.config/openfortivpn/config
-#                in the VM) + OTP.  Certificate fingerprint is auto-discovered
-#                if VPN_TRUSTED_CERT is not set in config.env.
-#   Later runs — config file already has the password; only OTP is prompted.
+#   connect_vpn_on_host   (PRIMARY — called early in provision.sh)
+#     Establishes the tunnel on the HOST before VM creation.  All VM providers
+#     use NAT networking, so the VM routes its traffic through the host and
+#     automatically inherits any VPN routes on ppp0.  No VPN needed in the VM.
+#
+#   connect_vpn_in_vm     (LEGACY — kept for standalone/fallback use)
+#     Establishes the tunnel inside the VM via SSH.  No longer called by
+#     provision.sh; retained so operators can invoke it manually if needed.
+#
+# Behaviour (both paths):
+#   First run  — prompts for password (saved to ~/.config/openfortivpn/config)
+#                + OTP.  Certificate fingerprint is auto-discovered if
+#                VPN_TRUSTED_CERT is not set in config.env.
+#   Later runs — config already has the password; only OTP is prompted.
 #
 # Requires:
 #   lib/log.sh, lib/vm.sh sourced
-#   VM_IP, VM_SSH_USER, VM_SSH_KEY, VM_SSH_PORT, VM_USER exported
 #   VPN_HOST, VPN_PORT, VPN_USERNAME, VPN_TRUSTED_CERT exported (config.env)
 # =============================================================================
+
+# =========================================================================== #
+#  HOST-SIDE HELPERS
+#  These run directly on the host machine (no vm_exec / SSH hop).
+# =========================================================================== #
+
+# --------------------------------------------------------------------------- #
+# _vpn_discover_cert_local
+# Runs openfortivpn on the HOST to extract the gateway certificate fingerprint.
+# Prints the fingerprint (e.g. "sha256:abcdef...") to stdout.
+# Returns 1 if fingerprint could not be parsed.
+# --------------------------------------------------------------------------- #
+_vpn_discover_cert_local() {
+  local vpn_user="$1" vpn_pass="$2"
+
+  local raw_output
+  raw_output=$(sudo timeout 12 openfortivpn \
+    "${VPN_HOST}:${VPN_PORT:-10443}" \
+    --username="${vpn_user}" \
+    --password="${vpn_pass}" \
+    2>&1 || true)
+
+  local fp=""
+  fp=$(printf '%s\n' "${raw_output}" \
+    | grep -oP 'sha256:[a-f0-9]+' | head -1 || true)
+  if [[ -z "${fp}" ]]; then
+    fp=$(printf '%s\n' "${raw_output}" \
+      | grep -oP '(?<=trusted-cert = )[a-f0-9:]+' | head -1 || true)
+  fi
+  if [[ -z "${fp}" ]]; then
+    fp=$(printf '%s\n' "${raw_output}" \
+      | grep -oP '(?<=Fingerprint: )[a-f0-9:]+' | head -1 || true)
+  fi
+
+  [[ -z "${fp}" ]] && return 1
+  printf '%s' "${fp}"
+}
+
+# --------------------------------------------------------------------------- #
+# _vpn_write_config_local
+# Writes ~/.config/openfortivpn/config on the HOST (chmod 600).
+# --------------------------------------------------------------------------- #
+_vpn_write_config_local() {
+  local vpn_config="$1"
+  local vpn_pass="$2"
+  local trusted_cert="$3"
+
+  local cert_line=""
+  [[ -n "${trusted_cert}" ]] && cert_line="trusted-cert = ${trusted_cert}"
+
+  mkdir -p "$(dirname "${vpn_config}")"
+  cat > "${vpn_config}" << EOVPNCFG
+host = ${VPN_HOST}
+port = ${VPN_PORT:-10443}
+username = ${VPN_USERNAME}
+password = ${vpn_pass}
+${cert_line}
+EOVPNCFG
+  chmod 600 "${vpn_config}"
+  success "VPN config saved to ${vpn_config}"
+}
+
+# --------------------------------------------------------------------------- #
+# _vpn_first_time_setup_host
+# Interactive first-time VPN setup running on the HOST.
+# Prompts for password, discovers/confirms cert fingerprint, writes config.
+# --------------------------------------------------------------------------- #
+_vpn_first_time_setup_host() {
+  local vpn_config="$1"
+
+  echo ""
+  echo -e "${_BOLD}  ┌─────────────────────────────────────────────────────────┐${_RESET}"
+  echo -e "${_BOLD}  │           FortiVPN — First-Time Setup                    │${_RESET}"
+  echo -e "${_BOLD}  └─────────────────────────────────────────────────────────┘${_RESET}"
+  echo ""
+  echo -e "  Host    : ${_CYAN}${VPN_HOST}:${VPN_PORT:-10443}${_RESET}"
+  echo -e "  User    : ${VPN_USERNAME}"
+  echo -e "  Config  : ${vpn_config}"
+  echo ""
+  echo -e "  Your password is saved once.  On subsequent runs only an OTP is needed."
+  echo ""
+
+  local _pass=""
+  read -rsp "  VPN password: " _pass
+  echo ""
+
+  local _cert="${VPN_TRUSTED_CERT:-}"
+
+  if [[ -z "${_cert}" ]]; then
+    info "Discovering VPN server certificate fingerprint..."
+    _cert=$(_vpn_discover_cert_local "${VPN_USERNAME}" "${_pass}") || true
+
+    if [[ -n "${_cert}" ]]; then
+      echo ""
+      echo -e "  Server certificate fingerprint: ${_CYAN}${_cert}${_RESET}"
+      echo -e "  Verify this matches your organisation's VPN gateway (ask IT if unsure)."
+      echo ""
+      read -rp "  Trust this certificate and continue? [Y/n] " _answer
+      case "${_answer,,}" in
+        n|no)
+          error "VPN setup cancelled by user."
+          unset _pass
+          return 1
+          ;;
+      esac
+    else
+      warn "Could not auto-discover certificate fingerprint."
+      warn "Set VPN_TRUSTED_CERT in config.env if connection fails with a cert error."
+    fi
+  fi
+
+  _vpn_write_config_local "${vpn_config}" "${_pass}" "${_cert}"
+  unset _pass
+
+  success "VPN config written."
+  info "On future runs, only your OTP is needed."
+}
+
+# --------------------------------------------------------------------------- #
+# connect_vpn_on_host
+# PRIMARY entry point — called from provision.sh BEFORE VM creation.
+#
+# Why on the host?
+#   All VM providers (libvirt NAT, multipass, incus) route the VM's traffic
+#   through the host gateway.  openfortivpn adds routes for private network
+#   ranges on ppp0; the host NATting those routes means the VM reaches every
+#   private resource without needing its own VPN tunnel.
+#
+# Skips silently when VPN_HOST is not set in config.env.
+# --------------------------------------------------------------------------- #
+connect_vpn_on_host() {
+  banner "FortiVPN (host)"
+
+  if [[ -z "${VPN_HOST:-}" ]]; then
+    echo ""
+    info "VPN_HOST is not set in config.env — skipping VPN setup."
+    info "If you need VPN access, add VPN_HOST / VPN_PORT / VPN_USERNAME to config.env."
+    return 0
+  fi
+
+  # Already connected?
+  if ip link show ppp0 >/dev/null 2>&1; then
+    echo ""
+    echo -e "  ${_GREEN}✔${_RESET}  VPN tunnel is already up on this machine (ppp0 active)."
+    echo -e "  ${_GREEN}✔${_RESET}  VM will route through this tunnel automatically via NAT — no VPN needed inside the VM."
+    echo ""
+    return 0
+  fi
+
+  echo ""
+  echo -e "  ${_YELLOW}→${_RESET}  VPN tunnel not detected on this machine — starting connection now."
+  echo ""
+
+  local vpn_config="${HOME}/.config/openfortivpn/config"
+
+  # First-time setup when no config exists yet
+  if [[ ! -f "${vpn_config}" ]]; then
+    _vpn_first_time_setup_host "${vpn_config}" || return 1
+  fi
+
+  # Prompt for OTP (required every connect)
+  echo ""
+  echo -e "${_BOLD}  ┌─────────────────────────────────────────────────────────┐${_RESET}"
+  echo -e "${_BOLD}  │           FortiVPN — Connect                             │${_RESET}"
+  echo -e "${_BOLD}  └─────────────────────────────────────────────────────────┘${_RESET}"
+  echo ""
+  echo -e "  Host: ${_CYAN}${VPN_HOST}:${VPN_PORT:-10443}${_RESET}   User: ${VPN_USERNAME}"
+  echo ""
+  local _otp=""
+  read -rp "  OTP (from FortiToken / authenticator app): " _otp
+  echo ""
+
+  info "Starting VPN tunnel on host..."
+
+  # Kill any stale process
+  sudo pkill -f openfortivpn 2>/dev/null || true
+  sleep 1
+
+  sudo nohup openfortivpn \
+    --config "${vpn_config}" \
+    --otp="${_otp}" \
+    > /tmp/openfortivpn.log 2>&1 &
+  local vpn_pid=$!
+  info "openfortivpn PID: ${vpn_pid}"
+  unset _otp
+
+  # Poll for ppp0 up to 30 s
+  local i
+  for i in $(seq 1 15); do
+    sleep 2
+    if ip link show ppp0 >/dev/null 2>&1; then
+      echo ""
+      echo -e "  ${_GREEN}✔${_RESET}  VPN tunnel is now up on this machine (ppp0 active)."
+      echo -e "  ${_GREEN}✔${_RESET}  VM will route through this tunnel automatically via NAT — no VPN needed inside the VM."
+      echo ""
+      return 0
+    fi
+    info "Waiting for VPN tunnel... (${i}/15)"
+  done
+
+  echo ""
+  error "VPN did not connect within 30s."
+  error "  Log: /tmp/openfortivpn.log"
+  cat /tmp/openfortivpn.log 2>/dev/null | tee -a "${LOG_FILE}" || true
+  echo ""
+  echo -e "  ${_YELLOW}To retry the VPN connection, run:${_RESET}"
+  echo -e "    sudo openfortivpn --config ${HOME}/.config/openfortivpn/config"
+  echo -e "  Once connected, re-run provisioning:"
+  echo -e "    ./provision.sh --resume"
+  echo ""
+  return 1
+}
+
+# =========================================================================== #
+#  VM-SIDE HELPERS  (legacy — tunnel inside the VM over SSH)
+# =========================================================================== #
 
 # --------------------------------------------------------------------------- #
 # _vpn_discover_cert

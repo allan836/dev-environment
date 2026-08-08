@@ -266,6 +266,53 @@ _clean_vm() {
 }
 
 # --------------------------------------------------------------------------- #
+# _check_native_mode
+# Called right after detect_host_os.  Compares the host Ubuntu codename
+# against the codename embedded in UBUNTU_CLOUD_IMAGE_URL (e.g. "noble").
+# When they match the host IS the target image — we set NATIVE_HOST=true and
+# wire VM_* variables to localhost so vm_exec/vm_push run locally.
+# --------------------------------------------------------------------------- #
+_check_native_mode() {
+  # Extract target codename from the URL path segment after "ubuntu.com/"
+  # e.g. https://cloud-images.ubuntu.com/noble/current/... → "noble"
+  local target_codename
+  target_codename="$(printf '%s' "${UBUNTU_CLOUD_IMAGE_URL:-}" \
+    | grep -oP 'ubuntu\.com/\K[^/]+')"
+
+  if [[ "${HOST_OS:-}" == "ubuntu" && \
+        -n "${HOST_UBUNTU_CODENAME:-}" && \
+        -n "${target_codename}" && \
+        "${HOST_UBUNTU_CODENAME}" == "${target_codename}" ]]; then
+
+    NATIVE_HOST=true
+    ACTIVE_PROVIDER="native"
+    VM_IP="localhost"
+    VM_SSH_USER="$(id -un)"
+    VM_SSH_PORT=22
+    # In native mode the developer user is the one running this script,
+    # not the hard-coded "ubuntu" cloud-image default.
+    VM_USER="$(id -un)"
+    export NATIVE_HOST ACTIVE_PROVIDER VM_IP VM_SSH_USER VM_SSH_PORT VM_USER
+
+    echo ""
+    info "Native mode detected: host is Ubuntu ${HOST_UBUNTU_CODENAME} — same as VM target (${target_codename})."
+    info "Skipping VM creation. All provisioning steps will run on this machine."
+    echo ""
+
+    # --clean / --destroy do not apply when there is no VM to manage.
+    if [[ "${CLEAN_FIRST:-false}" == "true" || "${DESTROY_FIRST:-false}" == "true" ]]; then
+      warn "--clean / --destroy ignored in native mode (no VM to manage)."
+      CLEAN_FIRST=false
+      DESTROY_FIRST=false
+    fi
+    return 0
+  fi
+
+  NATIVE_HOST=false
+  export NATIVE_HOST
+}
+
+# --------------------------------------------------------------------------- #
 # Final success banner
 # --------------------------------------------------------------------------- #
 _print_success() {
@@ -276,18 +323,32 @@ _print_success() {
   echo "  ║   ✔  Developer workstation ready.                    ║"
   echo "  ║                                                      ║"
   printf "  ║   Provider  : %-38s║\n" "${ACTIVE_PROVIDER}"
-  printf "  ║   VM Name   : %-38s║\n" "${VM_NAME}"
-  printf "  ║   VM IP     : %-38s║\n" "${VM_IP}"
-  printf "  ║   CPU / RAM : %-38s║\n" "${VM_CPU} vCPU / ${VM_RAM} MB"
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    printf "  ║   Mode      : %-38s║\n" "Native host (no VM)"
+    printf "  ║   User      : %-38s║\n" "${VM_USER}"
+  else
+    printf "  ║   VM Name   : %-38s║\n" "${VM_NAME}"
+    printf "  ║   VM IP     : %-38s║\n" "${VM_IP}"
+    printf "  ║   CPU / RAM : %-38s║\n" "${VM_CPU} vCPU / ${VM_RAM} MB"
+  fi
   echo "  ║                                                      ║"
-  echo "  ║   SSH into VM:                                       ║"
-  printf "  ║     ssh -i ~/.ssh/dev-env ubuntu@%-20s║\n" "${VM_IP}"
-  echo "  ║                                                      ║"
-  echo "  ║   Destroy VM  :  ./provision.sh --destroy            ║"
-  echo "  ║   Re-provision:  ./provision.sh                      ║"
-  echo "  ║   Re-run stack:  ssh -i ~/.ssh/dev-env               ║"
-  echo "  ║     ubuntu@<VM_IP> 'cd ~/workspace/repos/kv-backend/ ║"
-  echo "  ║     preload-docker-compose && ./sshprovision.sh'     ║"
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    echo "  ║   Services running on this machine:                  ║"
+    echo "  ║     http://localhost:8080/admin/login.html           ║"
+    echo "  ║                                                      ║"
+    echo "  ║   Re-provision:  ./provision.sh                      ║"
+    echo "  ║   Re-run stack:  cd ~/workspace/repos/kv-backend/    ║"
+    echo "  ║     preload-docker-compose && ./sshprovision.sh      ║"
+  else
+    echo "  ║   SSH into VM:                                       ║"
+    printf "  ║     ssh -i ~/.ssh/dev-env ubuntu@%-20s║\n" "${VM_IP}"
+    echo "  ║                                                      ║"
+    echo "  ║   Destroy VM  :  ./provision.sh --destroy            ║"
+    echo "  ║   Re-provision:  ./provision.sh                      ║"
+    echo "  ║   Re-run stack:  ssh -i ~/.ssh/dev-env               ║"
+    echo "  ║     ubuntu@<VM_IP> 'cd ~/workspace/repos/kv-backend/ ║"
+    echo "  ║     preload-docker-compose && ./sshprovision.sh'     ║"
+  fi
   echo "  ║                                                      ║"
   echo "  ╚══════════════════════════════════════════════════════╝"
   echo -e "${_RESET}"
@@ -311,81 +372,106 @@ main() {
     load_provision_state || exit 1
   else
     # ── Full provision path ───────────────────────────────────────────── #
-    step 1 7 "Detecting host OS"
+    step 1 8 "Detecting host OS"
     detect_host_os
+
+    # Check if the host is the same Ubuntu image we would boot in a VM.
+    # When true, skip VM creation entirely and provision the host directly.
+    _check_native_mode
 
     # --clean: wipe everything before detection so the next steps start
     # from an absolutely blank slate.  Runs early (right after OS detection)
     # so VM_NAME is known but no provider state has been touched yet.
+    # Skipped in native mode (_check_native_mode already cleared the flag).
     if [[ "${CLEAN_FIRST}" == "true" ]]; then
       _clean_vm
     fi
 
-    # On Fedora/RHEL, libvirt is the native path and requires the fewest
-    # additional dependencies (dnf install @virtualization vs. snap + multipass).
-    # Reorder the priority unless the caller forced a provider explicitly.
-    if [[ -z "${FORCE_PROVIDER}" ]]; then
-      case "$HOST_OS" in
-        fedora|rhel) PROVIDER_PRIORITY=("libvirt" "multipass" "incus") ;;
-      esac
+    # Connect FortiVPN on the HOST before VM creation.
+    # All VM providers use NAT networking — the VM's traffic goes through the
+    # host gateway, so any VPN routes on ppp0 are automatically inherited by
+    # the VM.  No VPN daemon is needed inside the VM.
+    # Skips silently when VPN_HOST is not set in config.env.
+    _SSH_FAILED_STEP="FortiVPN connect (host)"
+    step 2 8 "FortiVPN (host)"
+    connect_vpn_on_host
+
+    if [[ "${NATIVE_HOST:-false}" != "true" ]]; then
+      # On Fedora/RHEL, libvirt is the native path and requires the fewest
+      # additional dependencies (dnf install @virtualization vs. snap + multipass).
+      # Reorder the priority unless the caller forced a provider explicitly.
+      if [[ -z "${FORCE_PROVIDER}" ]]; then
+        case "$HOST_OS" in
+          fedora|rhel) PROVIDER_PRIORITY=("libvirt" "multipass" "incus") ;;
+        esac
+      fi
+
+      step 3 8 "Detecting virtualization providers"
+      detect_providers
+
+      # --provider flag overrides auto-detection
+      if [[ -n "${FORCE_PROVIDER}" ]]; then
+        SELECTED_PROVIDER="${FORCE_PROVIDER}"
+        AVAILABLE_PROVIDERS=("${FORCE_PROVIDER}")
+        info "Provider forced via --provider flag: ${SELECTED_PROVIDER}"
+      else
+        select_provider
+      fi
+
+      step 4 8 "Installing provider tools"
+      ensure_provider
+
+      if [[ "${DESTROY_FIRST}" == "true" ]]; then
+        destroy_vm
+      fi
+
+      step 5 8 "Creating VM"
+      boot_vm
+
+      # Persist VM connection details so --resume can skip the boot phase
+      # if provisioning is interrupted after this point.
+      save_provision_state
     fi
-
-    step 2 7 "Detecting virtualization providers"
-    detect_providers
-
-    # --provider flag overrides auto-detection
-    if [[ -n "${FORCE_PROVIDER}" ]]; then
-      SELECTED_PROVIDER="${FORCE_PROVIDER}"
-      AVAILABLE_PROVIDERS=("${FORCE_PROVIDER}")
-      info "Provider forced via --provider flag: ${SELECTED_PROVIDER}"
-    else
-      select_provider
-    fi
-
-    step 3 7 "Installing provider tools"
-    ensure_provider
-
-    if [[ "${DESTROY_FIRST}" == "true" ]]; then
-      destroy_vm
-    fi
-
-    step 4 7 "Creating VM"
-    boot_vm
-
-    # Persist VM connection details so --resume can skip the boot phase
-    # if provisioning is interrupted after this point.
-    save_provision_state
   fi
 
-  step 5 7 "Waiting for SSH"
-  if ! wait_for_ssh; then
-    # SSH key auth timed out — attempt automatic recovery before giving up.
-    # ssh_recovery() will either restore SSH and return 0, or die() with
-    # instructions for the user to follow and retry via --resume.
-    ssh_recovery
+  if [[ "${NATIVE_HOST:-false}" == "true" ]]; then
+    # No VM to wait for — we are already on the target machine.
+    _SSH_READY=true
+    echo ""
+    echo -e "  [${_GREEN}✓${_RESET}] Native host — Ubuntu ${HOST_UBUNTU_CODENAME:-}  |  user: ${VM_USER}"
+    echo -e "  [ ] Provisioning with Ansible (starting now)"
+    echo ""
+  else
+    step 6 8 "Waiting for SSH"
+    if ! wait_for_ssh; then
+      # SSH key auth timed out — attempt automatic recovery before giving up.
+      # ssh_recovery() will either restore SSH and return 0, or die() with
+      # instructions for the user to follow and retry via --resume.
+      ssh_recovery
+    fi
+
+    # From this point onward the VM is reachable over SSH.
+    # The ERR trap will offer an interactive SSH session on failure.
+    _SSH_READY=true
+
+    # Wait for cloud-init to finish its first-boot work before handing off to
+    # Ansible.  Without this gate, package installation and user setup may still
+    # be in progress, causing Ansible tasks to fail on the first run even though
+    # a second run immediately afterwards always succeeds.
+    wait_for_cloud_init
+
+    echo ""
+    echo -e "${_BOLD}  Boot timeline:${_RESET}"
+    echo -e "  [${_GREEN}✓${_RESET}] VM created  — ${ACTIVE_PROVIDER}  |  VM_USER: ${VM_USER}"
+    echo -e "  [${_GREEN}✓${_RESET}] Guest running  |  IP: ${VM_IP}"
+    echo -e "  [${_GREEN}✓${_RESET}] SSH available  |  ${VM_SSH_USER}@${VM_IP}:${VM_SSH_PORT:-22}"
+    echo -e "  [${_GREEN}✓${_RESET}] Cloud-init first boot complete"
+    echo -e "  [ ] Provisioning with Ansible (starting now)"
+    echo ""
   fi
-
-  # From this point onward the VM is reachable over SSH.
-  # The ERR trap will offer an interactive SSH session on failure.
-  _SSH_READY=true
-
-  # Wait for cloud-init to finish its first-boot work before handing off to
-  # Ansible.  Without this gate, package installation and user setup may still
-  # be in progress, causing Ansible tasks to fail on the first run even though
-  # a second run immediately afterwards always succeeds.
-  wait_for_cloud_init
-
-  echo ""
-  echo -e "${_BOLD}  Boot timeline:${_RESET}"
-  echo -e "  [${_GREEN}✓${_RESET}] VM created  — ${ACTIVE_PROVIDER}  |  VM_USER: ${VM_USER}"
-  echo -e "  [${_GREEN}✓${_RESET}] Guest running  |  IP: ${VM_IP}"
-  echo -e "  [${_GREEN}✓${_RESET}] SSH available  |  ${VM_SSH_USER}@${VM_IP}:${VM_SSH_PORT:-22}"
-  echo -e "  [${_GREEN}✓${_RESET}] Cloud-init first boot complete"
-  echo -e "  [ ] Provisioning with Ansible (starting now)"
-  echo ""
 
   _SSH_FAILED_STEP="GitHub SSH key setup"
-  step 6 7 "GitHub SSH key setup"
+  step 7 8 "GitHub SSH key setup"
   setup_ssh_key
 
   # Clone kv-backend and download the Docker image tarball immediately after
@@ -399,7 +485,7 @@ main() {
 
   # Install all tools first via Ansible before applying config or starting services.
   _SSH_FAILED_STEP="Provisioning VM (Ansible)"
-  step 7 7 "Provisioning VM"
+  step 8 8 "Provisioning VM"
   run_ansible
 
   # Prompt for Nexus credentials if not already set in config.env.
@@ -414,11 +500,8 @@ main() {
   _SSH_FAILED_STEP="apply kv-backend local config"
   apply_kv_config
 
-  # Connect to FortiVPN inside the VM so Docker can reach private registries.
-  # Skips silently when VPN_HOST is not set in config.env.
-  _SSH_FAILED_STEP="FortiVPN connect"
-  connect_vpn_in_vm
-
+  # VPN is handled on the host (step 2) — VM routes through host NAT.
+  # start_kv_services passes --skip-vpn so sshprovision.sh skips in-VM VPN setup.
   _SSH_FAILED_STEP="start kv-backend services"
   start_kv_services
 
