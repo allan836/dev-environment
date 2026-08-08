@@ -488,6 +488,26 @@ _build_war_files() {
 }
 
 # --------------------------------------------------------------------------- #
+# Step 6b: Free port 8080 — stop the Tomcat 9 systemd service if it is
+# running.  Ansible installs Tomcat 9 as a system service for standalone use,
+# but the portal runs inside the kv_portal Docker container which also binds
+# port 8080.  Leaving both up causes "address already in use" on docker up.
+# --------------------------------------------------------------------------- #
+_free_port_8080() {
+  if systemctl is-active --quiet tomcat9 2>/dev/null; then
+    _info "Stopping system Tomcat 9 to free port 8080 for kv_portal container..."
+    sudo systemctl stop tomcat9
+    sudo systemctl disable tomcat9
+    _success "Tomcat 9 stopped and disabled — port 8080 is now free."
+  elif ss -tlnp 2>/dev/null | grep -q ':8080 '; then
+    _warn "Port 8080 is in use by an unknown process:"
+    ss -tlnp | grep ':8080 ' || true
+    _warn "kv_portal may fail to bind — check what is holding port 8080."
+  else
+    _info "Port 8080 is free."
+  fi
+}
+
 # Step 7: Start portal + sidekiq containers
 # --------------------------------------------------------------------------- #
 _start_app_containers() {
@@ -1042,6 +1062,7 @@ main() {
   # Maven is retried up to 3 times internally; docker-compose and unzip
   # proceed regardless of Maven result as long as any WAR exists.
   _run_step "Build WAR files (Maven)"      _build_war_files
+  _run_step "Free port 8080 (stop Tomcat)" _free_port_8080
   _run_step "Start app containers"         _start_app_containers
   _run_step "Unzip WARs in portal"         _unzip_wars_in_portal
   _run_step "Restart portal"               _restart_portal
