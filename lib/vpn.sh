@@ -156,19 +156,20 @@ _vpn_first_time_setup_host() {
 connect_vpn_on_host() {
   banner "FortiVPN (host)"
 
+  # Check ppp0 first — the tunnel may already be up regardless of whether
+  # VPN_HOST is set in config.env (e.g. connected manually before running provision.sh).
+  if ip link show ppp0 >/dev/null 2>&1; then
+    echo ""
+    echo -e "  ${_GREEN}✔${_RESET}  VPN is active on this machine (ppp0 interface up)."
+    echo -e "  ${_GREEN}✔${_RESET}  VM will route through this tunnel automatically via NAT — no VPN needed inside the VM."
+    echo ""
+    return 0
+  fi
+
   if [[ -z "${VPN_HOST:-}" ]]; then
     echo ""
     info "VPN_HOST is not set in config.env — skipping VPN setup."
     info "If you need VPN access, add VPN_HOST / VPN_PORT / VPN_USERNAME to config.env."
-    return 0
-  fi
-
-  # Already connected?
-  if ip link show ppp0 >/dev/null 2>&1; then
-    echo ""
-    echo -e "  ${_GREEN}✔${_RESET}  VPN tunnel is already up on this machine (ppp0 active)."
-    echo -e "  ${_GREEN}✔${_RESET}  VM will route through this tunnel automatically via NAT — no VPN needed inside the VM."
-    echo ""
     return 0
   fi
 
