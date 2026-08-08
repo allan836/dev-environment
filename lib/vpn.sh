@@ -145,13 +145,23 @@ _vpn_first_time_setup() {
 # Skips silently when VPN_HOST is not set.
 # --------------------------------------------------------------------------- #
 connect_vpn_in_vm() {
-  if [[ -z "${VPN_HOST:-}" ]]; then
-    info "VPN_HOST not set in config.env — skipping VPN setup."
-    info "Set VPN_HOST, VPN_PORT, and VPN_USERNAME to enable automatic VPN connection."
-    return 0
-  fi
-
   banner "FortiVPN"
+
+  # ── Interactive first-time config if host vars are empty ─────────────── #
+  if [[ -z "${VPN_HOST:-}" ]]; then
+    echo ""
+    echo -e "  VPN_HOST is not set in config.env."
+    echo -e "  Fill in your FortiVPN settings now — they will be used for this run."
+    echo -e "  To persist them, add VPN_HOST / VPN_PORT / VPN_USERNAME to config.env."
+    echo ""
+    read -rp  "  VPN host (e.g. vpn.company.com): " VPN_HOST
+    read -rp  "  VPN port [10443]: "                _tmp_port
+    VPN_PORT="${_tmp_port:-10443}"
+    read -rp  "  VPN username: "                    VPN_USERNAME
+    export VPN_HOST VPN_PORT VPN_USERNAME
+    unset _tmp_port
+    echo ""
+  fi
 
   # ── Already connected? ───────────────────────────────────────────────── #
   local ppp_up

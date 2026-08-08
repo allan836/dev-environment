@@ -304,6 +304,25 @@ _apply_config_patches() {
     _warn "Migration file not found: ${db_migration}"
   fi
 
+  # docker-compose.yml: remove WAR file bind-mounts for portal
+  # WHY: Docker cannot bind-mount a host FILE to a container path that does
+  # not already exist as a file. When the destination path is absent, Docker
+  # creates a directory there, then fails with "not a directory". We remove
+  # those mounts here and copy the WARs in via docker cp after the container
+  # starts (see _unzip_wars_in_portal).
+  local compose_yml="${PRELOAD_DIR}/docker-compose.yml"
+  if [[ -f "${compose_yml}" ]]; then
+    if grep -q '\.war:' "${compose_yml}" 2>/dev/null; then
+      # Comment out lines that bind-mount .war files (lines like: - /path/to/foo.war:/dest.war)
+      sed -i 's|^\(\s*-\s.*\.war:.*\)$|      # WAR_MOUNT_REMOVED \1|' "${compose_yml}"
+      _success "docker-compose.yml: WAR bind-mounts commented out (will use docker cp instead)"
+    else
+      _info "docker-compose.yml: no WAR bind-mounts found — skipping"
+    fi
+  else
+    _warn "docker-compose.yml not found at ${compose_yml}"
+  fi
+
   return 0
 }
 
@@ -487,6 +506,29 @@ _unzip_wars_in_portal() {
   docker exec kv_portal bash -c "apt-get update -qq && apt-get install -y unzip -qq" >/dev/null 2>&1 || \
     docker exec kv_portal bash -c "which unzip" >/dev/null 2>&1 || \
     _warn "Could not install unzip — it may already be present"
+
+  # Copy WARs into the container via docker cp (bind-mounts were removed in
+  # _apply_config_patches to avoid the "not a directory" Docker mount error).
+  local portal_war
+  portal_war=$(ls "${KV_DIR}/portal/target/"portal-*.war 2>/dev/null | head -1 || true)
+  local backend_war
+  backend_war=$(ls "${KV_DIR}/kv-backend/target/"kv-backend-*.war 2>/dev/null | head -1 || true)
+
+  if [[ -n "${portal_war}" ]]; then
+    _info "Copying $(basename "${portal_war}") → portal:/usr/local/tomcat/webapps/ROOT.war"
+    docker cp "${portal_war}" kv_portal:/usr/local/tomcat/webapps/ROOT.war
+    _success "ROOT.war copied"
+  else
+    _warn "portal WAR not found — ROOT.war will be missing"
+  fi
+
+  if [[ -n "${backend_war}" ]]; then
+    _info "Copying $(basename "${backend_war}") → portal:/usr/local/tomcat/webapps/BACKEND.war"
+    docker cp "${backend_war}" kv_portal:/usr/local/tomcat/webapps/BACKEND.war
+    _success "BACKEND.war copied"
+  else
+    _warn "kv-backend WAR not found — BACKEND.war will be missing"
+  fi
 
   _info "Unzipping ROOT.war inside portal container..."
   docker exec kv_portal bash -c "
@@ -682,7 +724,7 @@ TRACK_SQL
         _warn "  [fail] ${script_name} — continuing with next script"
         failed=$(( failed + 1 ))
       fi
-    done < <(find "${mysql_dir}" -maxdepth 2 -name '*.sql' | sort -z)
+    done < <(find "${mysql_dir}" -maxdepth 2 -name '*.sql' -print0 | sort -z)
   else
     _info "No mysql/ subdir in ${alter_dir} — skipping MySQL alter scripts"
   fi
@@ -711,7 +753,7 @@ TRACK_SQL
         _warn "  [fail] ${script_name} — continuing with next script"
         failed=$(( failed + 1 ))
       fi
-    done < <(find "${cassandra_dir}" -maxdepth 2 -name '*.cql' | sort -z)
+    done < <(find "${cassandra_dir}" -maxdepth 2 -name '*.cql' -print0 | sort -z)
   else
     _info "No cassandra/ subdir in ${alter_dir} — skipping Cassandra alter scripts"
   fi
@@ -763,7 +805,7 @@ TRACK_SQL
         _warn "  [fail] ${script_name} — continuing with next script"
         failed=$(( failed + 1 ))
       fi
-    done < <(find "${solr_dir}" -maxdepth 2 \( -name '*.json' -o -name '*.xml' \) | sort -z)
+    done < <(find "${solr_dir}" -maxdepth 2 \( -name '*.json' -o -name '*.xml' \) -print0 | sort -z)
   else
     _info "No solr/ subdir in ${alter_dir} — skipping Solr alter scripts"
   fi
