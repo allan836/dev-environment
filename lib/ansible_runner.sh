@@ -169,14 +169,46 @@ clone_kv_backend() {
 }
 
 # --------------------------------------------------------------------------- #
+# Nexus credentials store
+#
+# Credentials are persisted to ~/.config/dev-environment/nexus-creds
+# (outside the repo, chmod 600) after the first successful entry.
+# On every subsequent run they are loaded silently — no prompt shown.
+#
+# To reset / change credentials, delete the file:
+#   rm ~/.config/dev-environment/nexus-creds
+# --------------------------------------------------------------------------- #
+_NEXUS_CREDS_FILE="${HOME}/.config/dev-environment/nexus-creds"
+
+_load_nexus_creds() {
+  [[ -f "${_NEXUS_CREDS_FILE}" ]] || return 0
+  # shellcheck disable=SC1090
+  . "${_NEXUS_CREDS_FILE}"
+  export NEXUS_USERNAME NEXUS_PASSWORD
+}
+
+_save_nexus_creds() {
+  mkdir -p "$(dirname "${_NEXUS_CREDS_FILE}")"
+  cat > "${_NEXUS_CREDS_FILE}" << EOCREDS
+NEXUS_USERNAME=${NEXUS_USERNAME}
+NEXUS_PASSWORD=${NEXUS_PASSWORD}
+EOCREDS
+  chmod 600 "${_NEXUS_CREDS_FILE}"
+  success "Nexus credentials saved to ${_NEXUS_CREDS_FILE}"
+  info "  You will not be asked again on this machine."
+  info "  To change credentials: rm ${_NEXUS_CREDS_FILE}"
+}
+
+# --------------------------------------------------------------------------- #
 # prompt_nexus_credentials
-# Interactively asks for Nexus username then password when either is not
-# already set in the environment (i.e. left blank in config.env).
-# Username is shown as typed; password is hidden (read -s).
+# Loads saved credentials first (silent). Only prompts on first run or when
+# the credentials file has been deleted.
 # --------------------------------------------------------------------------- #
 prompt_nexus_credentials() {
+  _load_nexus_creds
+
   if [[ -n "${NEXUS_USERNAME:-}" && -n "${NEXUS_PASSWORD:-}" ]]; then
-    info "Nexus credentials already set — skipping prompt."
+    info "Nexus credentials loaded from ${_NEXUS_CREDS_FILE} — skipping prompt."
     return 0
   fi
 
@@ -188,6 +220,7 @@ prompt_nexus_credentials() {
   echo -e "  These are needed to resolve internal Maven dependencies"
   echo -e "  from ${_CYAN}nexus.cicd.nextgen-kiyoh.com${_RESET}."
   echo -e "  Ask a fellow developer (e.g. Gerwel) if you don't have them."
+  echo -e "  Credentials are saved securely and will not be asked again."
   echo ""
 
   if [[ -z "${NEXUS_USERNAME:-}" ]]; then
@@ -198,11 +231,12 @@ prompt_nexus_credentials() {
   if [[ -z "${NEXUS_PASSWORD:-}" ]]; then
     read -rsp "  Nexus password: " NEXUS_PASSWORD
     export NEXUS_PASSWORD
-    echo ""   # newline after hidden input
+    echo ""
   fi
 
   echo ""
   success "Nexus credentials received."
+  _save_nexus_creds
   echo ""
 }
 
