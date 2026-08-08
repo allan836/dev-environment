@@ -166,16 +166,27 @@ connect_vpn_on_host() {
     return 0
   fi
 
-  if [[ -z "${VPN_HOST:-}" ]]; then
-    echo ""
-    info "VPN_HOST is not set in config.env — skipping VPN setup."
-    info "If you need VPN access, add VPN_HOST / VPN_PORT / VPN_USERNAME to config.env."
-    return 0
-  fi
-
   echo ""
   echo -e "  ${_YELLOW}→${_RESET}  VPN tunnel not detected on this machine — starting connection now."
   echo ""
+
+  if [[ -z "${VPN_HOST:-}" ]]; then
+    echo -e "${_BOLD}  ┌─────────────────────────────────────────────────────────┐${_RESET}"
+    echo -e "${_BOLD}  │           FortiVPN — Setup                               │${_RESET}"
+    echo -e "${_BOLD}  └─────────────────────────────────────────────────────────┘${_RESET}"
+    echo ""
+    echo -e "  VPN_HOST is not set in config.env — enter your VPN details now."
+    echo -e "  To skip this prompt in future, add these to config.env:"
+    echo -e "    VPN_HOST, VPN_PORT, VPN_USERNAME"
+    echo ""
+    read -rp  "  VPN host (e.g. vpn.company.com): " VPN_HOST
+    read -rp  "  VPN port [10443]: "                 _tmp_port
+    VPN_PORT="${_tmp_port:-10443}"
+    read -rp  "  VPN username: "                     VPN_USERNAME
+    export VPN_HOST VPN_PORT VPN_USERNAME
+    unset _tmp_port
+    echo ""
+  fi
 
   local vpn_config="${HOME}/.config/openfortivpn/config"
 
