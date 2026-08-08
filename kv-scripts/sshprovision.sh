@@ -63,6 +63,143 @@ if [[ ! -d "${PRELOAD_DIR}" ]]; then
   exit 1
 fi
 
+VPN_CONFIG="${HOME}/.config/openfortivpn/config"
+
+# --------------------------------------------------------------------------- #
+# Step 0: FortiVPN connect
+#
+# Connects to the FortiVPN gateway using openfortivpn so that Docker can pull
+# images from the private registry.
+#
+# First run  — requires password (saved to ${VPN_CONFIG}) + OTP.
+# Later runs — password is in saved config; only OTP is prompted.
+#
+# Skips silently when:
+#   - VPN is already connected (ppp0 interface is up), OR
+#   - ${VPN_CONFIG} does not exist AND running in --ci mode (non-interactive)
+# --------------------------------------------------------------------------- #
+_connect_vpn() {
+  # Already connected — nothing to do
+  if ip link show ppp0 >/dev/null 2>&1; then
+    _success "VPN already connected (ppp0 up)"
+    return 0
+  fi
+
+  # No config and non-interactive CI mode — warn and skip
+  if [[ ! -f "${VPN_CONFIG}" && "${CI_MODE}" == "true" ]]; then
+    _warn "VPN not connected and no VPN config found at ${VPN_CONFIG}"
+    _warn "Docker pulls from private registries may fail."
+    _warn "Run sshprovision.sh interactively once to complete VPN setup:"
+    _warn "  cd ${PRELOAD_DIR} && ./sshprovision.sh"
+    return 0
+  fi
+
+  # No config — first-time interactive setup
+  if [[ ! -f "${VPN_CONFIG}" ]]; then
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────┐"
+    echo "│           FortiVPN — First-Time Setup                    │"
+    echo "└─────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "  Your VPN password will be saved to:"
+    echo "  ${VPN_CONFIG}"
+    echo "  On subsequent runs, only an OTP is required."
+    echo ""
+
+    local _vpn_host _vpn_port _vpn_user _vpn_pass _vpn_cert
+
+    read -rp  "  VPN host (e.g. vpn.company.com): " _vpn_host
+    read -rp  "  VPN port [10443]: "                _vpn_port
+    _vpn_port="${_vpn_port:-10443}"
+    read -rp  "  VPN username: "                    _vpn_user
+    read -rsp "  VPN password: "                    _vpn_pass
+    echo ""
+
+    # Auto-discover certificate fingerprint
+    _info "Discovering VPN server certificate fingerprint..."
+    local _raw_cert_output
+    _raw_cert_output=$(echo "${_vpn_pass}" \
+      | sudo timeout 12 openfortivpn \
+          "${_vpn_host}:${_vpn_port}" \
+          --username="${_vpn_user}" \
+          --password="${_vpn_pass}" \
+          2>&1 || true)
+
+    _vpn_cert=$(printf '%s\n' "${_raw_cert_output}" \
+      | grep -oP 'sha256:[a-f0-9]+' | head -1 || true)
+    if [[ -z "${_vpn_cert}" ]]; then
+      _vpn_cert=$(printf '%s\n' "${_raw_cert_output}" \
+        | grep -oP '(?<=trusted-cert = )[a-f0-9:]+' | head -1 || true)
+    fi
+
+    local _cert_line=""
+    if [[ -n "${_vpn_cert}" ]]; then
+      echo ""
+      echo "  Certificate fingerprint: ${_vpn_cert}"
+      read -rp "  Trust this certificate? [Y/n] " _ans
+      case "${_ans,,}" in
+        n|no)
+          _error "VPN setup cancelled."
+          unset _vpn_pass
+          return 1
+          ;;
+      esac
+      _cert_line="trusted-cert = ${_vpn_cert}"
+    else
+      _warn "Could not auto-discover certificate fingerprint — omitting from config."
+    fi
+
+    mkdir -p "$(dirname "${VPN_CONFIG}")"
+    cat > "${VPN_CONFIG}" << EOVPNCFG
+host = ${_vpn_host}
+port = ${_vpn_port}
+username = ${_vpn_user}
+password = ${_vpn_pass}
+${_cert_line}
+EOVPNCFG
+    chmod 600 "${VPN_CONFIG}"
+    unset _vpn_pass
+    _success "VPN config saved to ${VPN_CONFIG}"
+    _info "On subsequent runs, only your OTP is required."
+  fi
+
+  # Prompt for OTP (always required)
+  echo ""
+  local _otp=""
+  read -rp "  VPN OTP (from FortiToken / authenticator app): " _otp
+  echo ""
+
+  _info "Connecting to VPN..."
+
+  # Kill any stale process
+  sudo pkill -f openfortivpn 2>/dev/null || true
+  sleep 1
+
+  sudo nohup openfortivpn \
+    --config "${VPN_CONFIG}" \
+    --otp="${_otp}" \
+    > /tmp/openfortivpn.log 2>&1 &
+  local vpn_pid=$!
+  _info "openfortivpn PID: ${vpn_pid}"
+  unset _otp
+
+  # Wait up to 30s for ppp0
+  local i
+  for i in $(seq 1 15); do
+    sleep 2
+    if ip link show ppp0 >/dev/null 2>&1; then
+      _success "VPN tunnel up (ppp0 active)"
+      return 0
+    fi
+    printf '[sshprovision] INFO  Waiting for VPN tunnel... (%d/15)\n' "${i}"
+  done
+
+  _error "VPN did not connect within 30s."
+  _error "Log: /tmp/openfortivpn.log"
+  cat /tmp/openfortivpn.log 2>/dev/null || true
+  return 1
+}
+
 # --------------------------------------------------------------------------- #
 # Step 1: Load preload Docker images from tarball
 # --------------------------------------------------------------------------- #
@@ -835,6 +972,7 @@ main() {
   echo "╚════════════════════════════════════════════════════════╝"
   echo ""
 
+  _run_step "Connect VPN"                  _connect_vpn
   _run_step "Load Docker images"           _load_preload_images
   _run_step "Start infra containers"       _start_infra_containers
   _run_step "Enable Cassandra thrift"      _enable_cassandra_thrift

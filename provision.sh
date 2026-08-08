@@ -108,6 +108,8 @@ source "${REPO_ROOT}/lib/providers/incus.sh"
 source "${REPO_ROOT}/lib/vm.sh"
 # shellcheck source=lib/ansible_runner.sh
 source "${REPO_ROOT}/lib/ansible_runner.sh"
+# shellcheck source=lib/vpn.sh
+source "${REPO_ROOT}/lib/vpn.sh"
 # shellcheck source=lib/verify.sh
 source "${REPO_ROOT}/lib/verify.sh"
 # shellcheck source=lib/recovery.sh
@@ -149,6 +151,7 @@ export PROVIDER_PRIORITY ACTIVE_PROVIDER SELECTED_PROVIDER AVAILABLE_PROVIDERS
 export UBUNTU_CLOUD_IMAGE_URL UBUNTU_CLOUD_IMAGE_URL_ARM
 export KV_BACKEND_REPO KV_BACKEND_TARBALL_URL KV_BACKEND_SECRETS_URL KV_PORTAL_SECRETS_URL
 export DEV_ENV_REPO
+export VPN_HOST VPN_PORT VPN_USERNAME VPN_TRUSTED_CERT
 
 # --------------------------------------------------------------------------- #
 # Argument parsing
@@ -410,6 +413,11 @@ main() {
   # Apply kv-backend config after Ansible has installed all dependencies (Maven, Java, etc.)
   _SSH_FAILED_STEP="apply kv-backend local config"
   apply_kv_config
+
+  # Connect to FortiVPN inside the VM so Docker can reach private registries.
+  # Skips silently when VPN_HOST is not set in config.env.
+  _SSH_FAILED_STEP="FortiVPN connect"
+  connect_vpn_in_vm
 
   _SSH_FAILED_STEP="start kv-backend services"
   start_kv_services
